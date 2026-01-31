@@ -20,7 +20,8 @@ end
 local function init_db(db)
   local ok, err = db:exec([[
     CREATE TABLE IF NOT EXISTS weather (
-      city TEXT PRIMARY KEY,
+      query_city TEXT PRIMARY KEY,
+      display_city TEXT,
       temperature REAL,
       conditions TEXT,
       humidity INTEGER,
@@ -52,11 +53,12 @@ local function time_ago(timestamp)
 end
 
 -- Get cached weather for a city
-local function get_cached_weather(db, city)
-  local city_lower = city:lower()
-  for row in db:query("SELECT * FROM weather WHERE lower(city) = ?", city_lower) do
+local function get_cached_weather(db, query_city)
+  local city_lower = query_city:lower()
+  for row in db:query("SELECT * FROM weather WHERE lower(query_city) = ?", city_lower) do
     return {
-      city = row.city,
+      query_city = row.query_city,
+      city = row.display_city,
       temperature = row.temperature,
       conditions = row.conditions,
       humidity = row.humidity,
@@ -69,8 +71,9 @@ end
 -- Save weather to cache
 local function save_weather(db, weather)
   local ok, err = db:exec(string.format(
-    [[INSERT OR REPLACE INTO weather (city, temperature, conditions, humidity, timestamp)
-      VALUES ('%s', %f, '%s', %d, %d)]],
+    [[INSERT OR REPLACE INTO weather (query_city, display_city, temperature, conditions, humidity, timestamp)
+      VALUES ('%s', '%s', %f, '%s', %d, %d)]],
+    weather.query_city:gsub("'", "''"),
     weather.city:gsub("'", "''"),
     weather.temperature,
     weather.conditions:gsub("'", "''"),
@@ -81,9 +84,9 @@ local function save_weather(db, weather)
 end
 
 -- Fetch weather from wttr.in API
-local function fetch_weather(city)
+local function fetch_weather(query_city)
   -- URL encode the city name
-  local encoded_city = city:gsub(" ", "+"):gsub(",", "%%2C")
+  local encoded_city = query_city:gsub(" ", "+"):gsub(",", "%%2C")
   local url = string.format("https://wttr.in/%s?format=j1", encoded_city)
 
   local result = fetch.Fetch(url)
@@ -107,12 +110,12 @@ local function fetch_weather(city)
 
   local current = data.current_condition[1]
 
-  -- Get location name from response
-  local location = city
+  -- Get location name from response for display
+  local display_city = query_city
   if data.nearest_area and data.nearest_area[1] then
     local area = data.nearest_area[1]
     if area.areaName and area.areaName[1] then
-      location = area.areaName[1].value
+      display_city = area.areaName[1].value
     end
   end
 
@@ -125,7 +128,8 @@ local function fetch_weather(city)
   local humidity = tonumber(current.humidity) or 0
 
   return {
-    city = location,
+    query_city = query_city,
+    city = display_city,
     temperature = temp,
     conditions = conditions,
     humidity = humidity,
