@@ -1,0 +1,91 @@
+# Guidelines for Claude
+
+This document outlines the development workflow and best practices for Claude when working on tasks in this repository.
+
+## Branch Management
+
+**Always work on a dedicated branch for each task.**
+
+- Before starting a new task, create a new branch (if not already on one)
+- Branch names should follow the convention: `claude/<descriptive-name>-<session-id>`
+- Never work directly on the main branch
+- Each task should have its own isolated branch
+
+## Commit Practices
+
+**Commit frequently and comprehensively throughout the task.**
+
+- Commit after each meaningful step or change
+- Commit messages should explain the **rationale** for the change, not just what changed
+- Include commits for:
+  - Successful implementations
+  - Detours and alternative approaches tried
+  - Wrong turns and failed attempts
+  - Debugging steps and investigations
+  - Refactoring and improvements
+
+**The commit history should be a complete record of the entire attempt to complete the task**, including the thought process, experimentation, and problem-solving journey.
+
+### Commit Message Guidelines
+
+- Use clear, descriptive messages that explain WHY the change was made
+- Good: "Add error handling to prevent null pointer exceptions in user validation"
+- Poor: "Update code" or "Fix bug"
+- For failed attempts: "Try alternative approach using X instead of Y - encountered issue Z"
+- For investigations: "Investigate performance bottleneck in data processing loop"
+
+## Push Practices
+
+**Push frequently to the remote branch.**
+
+- Push after completing logical units of work
+- Push at least after every few commits
+- Don't wait until the task is complete to push
+- This ensures work is backed up and visible
+
+## Autonomous Work
+
+**Work independently until task completion.**
+
+- Analyze the task requirements thoroughly
+- Research the codebase as needed
+- Make implementation decisions based on best practices and existing patterns
+- Complete the entire task without requiring intermediate guidance
+
+## Testing and Validation
+
+**Validate that your implementation works by running manual tests.**
+
+- Test your changes before considering the task complete
+- Run the code/application to verify expected behavior
+- Test edge cases and error conditions
+- Document test results in commits if relevant
+- If automated tests exist, run them
+- If no tests exist, perform manual verification steps
+- Don't just write code and assume it works - prove it works
+
+## Asking for Guidance
+
+**If guidance is needed, ask the user upfront using the AskUserQuestion tool.**
+
+- Don't make assumptions about ambiguous requirements
+- Ask clarifying questions before starting work, not during
+- If you encounter a blocker that requires user input, ask immediately
+- Examples of when to ask:
+  - Ambiguous or conflicting requirements
+  - Design decisions that significantly impact architecture
+  - Missing information needed to proceed
+  - Choice between multiple valid approaches with different trade-offs
+
+## Summary
+
+The ideal workflow is:
+1. **Create/verify branch** for the task
+2. **Ask questions upfront** if any requirements are unclear
+3. **Work autonomously** on the implementation
+4. **Commit frequently** with detailed rationale in messages
+5. **Push regularly** to backup work
+6. **Test and validate** that changes work as expected
+7. **Complete the task** fully before requesting review
+
+This approach ensures a transparent, well-documented development process with a complete audit trail of the work performed, along with confidence that the implementation actually works.
