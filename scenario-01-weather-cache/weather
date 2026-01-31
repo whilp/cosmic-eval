@@ -3,19 +3,9 @@
 local cosmo = require("cosmo")
 local sqlite = require("cosmo.lsqlite3")
 local path = require("cosmo.path")
-local unix = require("cosmo.unix")
 
 local CACHE_EXPIRY_SECONDS = 30 * 60  -- 30 minutes
 local DB_PATH = path.join(os.getenv("HOME") or "/tmp", ".weather_cache.db")
-
--- Get API key from environment
-local function get_api_key()
-    local key = os.getenv("OPENWEATHERMAP_API_KEY") or os.getenv("WEATHER_API_KEY")
-    if not key or key == "" then
-        return nil, "API key not set. Set OPENWEATHERMAP_API_KEY or WEATHER_API_KEY environment variable."
-    end
-    return key
-end
 
 -- Initialize SQLite database
 local function init_db()
@@ -86,11 +76,52 @@ local function save_cache(db, city, data)
     return result == sqlite.DONE
 end
 
--- Fetch weather from OpenWeatherMap API
-local function fetch_weather(api_key, city)
+-- Fetch weather from wttr.in (free, no API key required)
+local function fetch_weather_wttr(city)
+    local url = string.format("https://wttr.in/%s?format=j1", cosmo.EscapeParam(city))
+
+    local status, headers, body = cosmo.Fetch(url)
+
+    if not status then
+        return nil, "Network error: " .. tostring(headers)
+    end
+
+    if status == 404 then
+        return nil, "City not found: " .. city
+    end
+
+    if status ~= 200 then
+        return nil, "API error (status " .. status .. ")"
+    end
+
+    local ok, data = pcall(cosmo.DecodeJson, body)
+    if not ok or not data then
+        return nil, "Failed to parse API response"
+    end
+
+    if not data.current_condition or not data.current_condition[1] then
+        return nil, "Unexpected API response format"
+    end
+
+    local current = data.current_condition[1]
+    local conditions = "Unknown"
+    if current.weatherDesc and current.weatherDesc[1] then
+        conditions = current.weatherDesc[1].value
+    end
+
+    return {
+        temperature = tonumber(current.temp_C) or 0,
+        conditions = conditions,
+        humidity = tonumber(current.humidity) or 0,
+        timestamp = os.time()
+    }
+end
+
+-- Fetch weather from OpenWeatherMap API (requires API key)
+local function fetch_weather_owm(api_key, city)
     local url = string.format(
         "https://api.openweathermap.org/data/2.5/weather?q=%s&appid=%s&units=metric",
-        cosmo.EncodeURIComponent(city),
+        cosmo.EscapeParam(city),
         api_key
     )
 
@@ -134,6 +165,17 @@ local function fetch_weather(api_key, city)
     }
 end
 
+-- Fetch weather using available API
+local function fetch_weather(city)
+    local api_key = os.getenv("OPENWEATHERMAP_API_KEY") or os.getenv("WEATHER_API_KEY")
+
+    if api_key and api_key ~= "" then
+        return fetch_weather_owm(api_key, city)
+    else
+        return fetch_weather_wttr(city)
+    end
+end
+
 -- Format time ago string
 local function time_ago(timestamp)
     local diff = os.time() - timestamp
@@ -164,13 +206,9 @@ local function main()
     if not city or city == "" or city == "-h" or city == "--help" then
         io.stderr:write("Usage: weather <city>\n")
         io.stderr:write("  Fetches weather data with local caching.\n\n")
-        io.stderr:write("Environment variables:\n")
-        io.stderr:write("  OPENWEATHERMAP_API_KEY - Your OpenWeatherMap API key\n")
-        io.stderr:write("  WEATHER_API_KEY        - Alternative API key variable\n")
+        io.stderr:write("Uses wttr.in (free) by default. Set OPENWEATHERMAP_API_KEY to use OpenWeatherMap.\n")
         os.exit(1)
     end
-
-    local api_key, key_err = get_api_key()
 
     local db, db_err = init_db()
     if not db then
@@ -188,22 +226,7 @@ local function main()
         return
     end
 
-    -- Need to fetch from API
-    if not api_key then
-        if cached then
-            -- Serve stale cache with warning
-            io.stderr:write("Warning: " .. key_err .. " Using stale cache.\n")
-            display_weather(city, cached, "Stale cached data from " .. time_ago(cached.timestamp))
-            db:close()
-            return
-        else
-            io.stderr:write("Error: " .. key_err .. "\n")
-            db:close()
-            os.exit(1)
-        end
-    end
-
-    local data, fetch_err = fetch_weather(api_key, city)
+    local data, fetch_err = fetch_weather(city)
 
     if not data then
         if cached then
