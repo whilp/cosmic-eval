@@ -80,6 +80,17 @@ This document outlines the development workflow and best practices for Claude wh
   - Missing information needed to proceed
   - Choice between multiple valid approaches with different trade-offs
 
+## Using Cosmic
+
+**Only use the latest release from the cosmic repository.**
+
+- Download and use the `cosmic-lua` release asset from https://github.com/whilp/cosmic
+- Get the latest release using the GitHub API or releases page
+- **NEVER clone the cosmic repository** - only download the release asset
+- The cosmic-lua binary is the only artifact needed to complete tasks
+
+This ensures you're working with stable, released versions of the tool rather than development code.
+
 ## Summary
 
 The ideal workflow is:
