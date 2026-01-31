@@ -54,15 +54,18 @@ This document outlines the development workflow and best practices for Claude wh
 
 ## Testing and Validation
 
-**Validate that your implementation works by running manual tests.**
+**Prove that your implementation works by running tests and providing evidence.**
 
-- Test your changes before considering the task complete
-- Run the code/application to verify expected behavior
+- Never consider a task complete without proving it works
+- Run the code/application and verify expected behavior
 - Test edge cases and error conditions
-- Document test results in commits if relevant
-- If automated tests exist, run them
-- If no tests exist, perform manual verification steps
-- Don't just write code and assume it works - prove it works
+- Execute automated tests if they exist
+- Perform manual verification steps and document the results
+- Show output, logs, or other evidence that demonstrates success
+- Include test results in commit messages when relevant
+- If it doesn't work, debug and fix until it does - then prove it
+
+**Don't just write code and assume it works - prove it works.**
 
 ## Asking for Guidance
 
@@ -85,7 +88,7 @@ The ideal workflow is:
 3. **Work autonomously** on the implementation
 4. **Commit frequently** with detailed rationale in messages
 5. **Push regularly** to backup work
-6. **Test and validate** that changes work as expected
+6. **Prove the implementation works** by running tests and providing evidence
 7. **Complete the task** fully before requesting review
 
-This approach ensures a transparent, well-documented development process with a complete audit trail of the work performed, along with confidence that the implementation actually works.
+This approach ensures a transparent, well-documented development process with a complete audit trail of the work performed, along with proof that the implementation actually works.
