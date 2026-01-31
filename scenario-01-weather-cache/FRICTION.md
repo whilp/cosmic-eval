@@ -4,6 +4,58 @@
 
 Built a weather CLI tool with HTTP fetching, JSON parsing, and SQLite caching using cosmic-lua. Total time: approximately 15 minutes from start to working implementation.
 
+## Critical mistake: I didn't run `--help`
+
+**I should have started with `cosmic-lua --help`.** Instead, I jumped straight to enumerating Lua tables to discover APIs. This was a significant error on my part.
+
+The help output shows everything I needed:
+
+```
+$ cosmic-lua --help
+cosmic-lua: cosmopolitan lua with bundled libraries
+
+Cosmic options:
+  --docs <query>                show documentation for module or symbol
+  --examples [module]           browse examples (list all, or show module)
+  ...
+
+Available modules:
+  cosmic:  benchmark, doc, ..., fetch, ..., json, ..., spawn, sqlite, ...
+  cosmo:   argon2, ..., lsqlite3, path, re, ..., unix, zip
+```
+
+And `--docs` provides comprehensive documentation with examples:
+
+```
+$ cosmic-lua --docs cosmic.fetch
+# fetch
+
+ Structured HTTP fetch with optional retry.
+ ...
+
+## Examples
+
+### get
+ Example_get demonstrates a simple HTTP GET request
+
+  local fetch = require("cosmic.fetch")
+  local result = fetch.Fetch("https://httpbin.org/get")
+  print("status:", result.status)
+```
+
+**The tooling I asked for in my original suggestions already exists.** I wasted time on trial-and-error when the answers were one `--help` away.
+
+### What I should have done differently
+
+1. Run `cosmic-lua --help` first
+2. Note the `--docs` and `--examples` flags
+3. Run `cosmic-lua --docs cosmic.fetch` to learn the HTTP API
+4. Use `cosmic.fetch.Fetch()` (structured results) instead of `cosmo.Fetch()` (multiple returns)
+
+### Why I didn't try --help
+
+Honestly, I'm not sure. I think I assumed cosmic-lua would be like standard Lua where `--help` just shows basic usage flags, not API documentation. That assumption was wrong.
+
 ## What went well
 
 ### Error messages with suggestions
@@ -54,65 +106,6 @@ local path = require("cosmo.path")
 local db_path = path.join(home, ".weather_cache.db")
 ```
 
-### HTTP fetching
-
-Once I understood the API, `cosmo.Fetch` was straightforward:
-
-```lua
-local status, headers, body = cosmo.Fetch(url)
-```
-
-## What was confusing
-
-### Discovering the Fetch return signature
-
-I initially assumed Fetch returned a table:
-```lua
-local resp = cosmo.Fetch(url)
-print(resp.status, resp.body)  -- ERROR: attempt to index a number value
-```
-
-The error revealed that the first return value was a number (the status code), so I had to experiment:
-```lua
-local status, headers, body = cosmo.Fetch(url)  -- correct
-```
-
-**Suggestion:** Documentation or `--help` output showing function signatures would eliminate this trial-and-error.
-
-### Discovering what modules exist
-
-I had no idea what modules were available. I resorted to enumerating table keys:
-
-```lua
-for k,v in pairs(require("cosmo")) do print(k, type(v)) end
-```
-
-This gave me a list of ~80 functions but no indication of:
-- What each function does
-- What arguments they take
-- What they return
-- Which other modules exist (like `cosmo.path`, `cosmo.unix`, `cosmo.lsqlite3`)
-
-**Suggestion:** A `cosmic-lua --list-modules` command or built-in `help()` function would help significantly.
-
-### No documentation for cosmo.* functions
-
-Functions like `EscapePath`, `EscapeHost`, `ParseUrl`, etc. have self-explanatory names, but I had to guess:
-- Does `EscapePath` do URL encoding? (Yes, it does)
-- What's the difference between `EscapeSegment`, `EscapeFragment`, `EscapePath`?
-
-I used `EscapePath` for the city name in the URL and it worked, but I wasn't confident it was the right choice.
-
-## What was surprising
-
-### wttr.in worked perfectly
-
-The external API (wttr.in) worked flawlessly with cosmic-lua's Fetch. No issues with headers, SSL, or response handling. This was a pleasant surprise - HTTP "just worked."
-
-### File I/O not needed
-
-I didn't need any file I/O beyond SQLite. The scenario was well-suited to the available tools.
-
 ### The binary is self-contained
 
 The cosmic-lua binary includes everything needed - Lua runtime, HTTP client, SQLite, JSON, path utilities. No external dependencies to install. This made setup trivial:
@@ -122,69 +115,80 @@ curl -sL <release-url>/cosmic-lua -o bin/cosmic-lua
 chmod +x bin/cosmic-lua
 ```
 
-## Suggestions for cosmic-lua
+## What was confusing (due to my mistake)
 
-### 1. Built-in help system
+### Discovering the Fetch return signature
 
+I used the low-level `cosmo.Fetch` which returns multiple values:
 ```lua
-help()                    -- list all modules
-help("cosmo")             -- list cosmo functions
-help("cosmo.Fetch")       -- show Fetch signature and description
+local status, headers, body = cosmo.Fetch(url)
 ```
 
-Or a CLI flag:
-```bash
-cosmic-lua --help-api
-cosmic-lua --help Fetch
-```
-
-### 2. Function signature discovery
-
-Something like:
+Had I checked `--docs`, I would have found `cosmic.fetch.Fetch` which returns a structured result:
 ```lua
-print(signature(cosmo.Fetch))
--- "Fetch(url: string, options?: table) -> status: number, headers: table, body: string"
+local fetch = require("cosmic.fetch")
+local result = fetch.Fetch(url)
+print(result.status, result.body, result.ok)
 ```
 
-### 3. Module listing
+This is cleaner and harder to misuse. My implementation works but uses the lower-level API unnecessarily.
 
-```bash
-cosmic-lua --list-modules
-# cosmo (core functions)
-# cosmo.path (path manipulation)
-# cosmo.unix (unix syscalls)
-# cosmo.lsqlite3 (SQLite database)
-# cosmo.re (regex)
-# ...
-```
+## What was surprising
 
-### 4. Examples in error messages
+### wttr.in worked perfectly
+
+The external API (wttr.in) worked flawlessly with cosmic-lua's Fetch. No issues with headers, SSL, or response handling. HTTP "just worked."
+
+### Documentation is comprehensive
+
+Once I actually looked at `--docs`, it has:
+- Type signatures (Teal types)
+- Parameter descriptions
+- Return value documentation
+- Working examples with expected output
+
+This is better than many mainstream language ecosystems.
+
+## Remaining suggestions for cosmic-lua
+
+Most of my original suggestions were already implemented. A few remaining ideas:
+
+### 1. REPL tab-completion
+
+An interactive REPL with tab-completion for module/function names would make exploration even faster.
+
+### 2. Examples in error messages
 
 When a function is called incorrectly, show an example:
 ```
 Fetch: expected string url, got nil
-Example: status, headers, body = cosmo.Fetch("https://example.com")
+Example: local result = fetch.Fetch("https://example.com")
 ```
 
-### 5. REPL improvements
+### 3. Discoverability hint on first run
 
-An interactive REPL with tab-completion for module/function names would make exploration much faster than writing test scripts.
+Perhaps on first run (or with `-i` for interactive), show a hint:
+```
+Tip: Use --docs <module> for API documentation, --examples to browse examples
+```
 
 ## Time breakdown
 
 | Task | Time | Notes |
 |------|------|-------|
 | Download cosmic-lua | 30s | Easy, just curl |
-| Discover APIs | 3 min | Enumerating tables, trial-and-error |
-| Understand Fetch signature | 2 min | Error-driven discovery |
+| Discover APIs | 3 min | Would be <30s with `--help` |
+| Understand Fetch signature | 2 min | Would be instant with `--docs` |
 | Implement weather.lua | 5 min | Straightforward once APIs understood |
 | Test all scenarios | 3 min | Fresh, cached, stale, errors |
 | Debug issues | 1 min | Minimal - things mostly worked |
 
-The API discovery phase (5 min) could be reduced to <1 min with documentation.
+**5 minutes of friction was entirely self-inflicted by not running `--help` first.**
 
 ## Conclusion
 
-cosmic-lua is capable and the APIs are well-designed. The main friction is **discoverability** - figuring out what's available and how to use it. Once discovered, the APIs work smoothly and predictably.
+cosmic-lua has excellent documentation via `--help`, `--docs`, and `--examples`. The friction I experienced was due to my failure to check these first.
 
-The error message suggestions (like "Did you mean cosmo.lsqlite3?") show the right philosophy - the tooling can guide users toward correct usage. Extending this to function signatures and module discovery would make the experience significantly smoother.
+The actual APIs are well-designed, the error messages are helpful, and the self-contained binary makes distribution trivial. If I had started with `--help`, this would have been a very smooth experience.
+
+**Lesson learned: always try `--help` first.**
