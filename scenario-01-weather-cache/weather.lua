@@ -1,13 +1,12 @@
 #!/usr/bin/env cosmic-lua
 -- Weather data cache CLI tool
--- Fetches weather from OpenWeatherMap API with SQLite caching
+-- Fetches weather from wttr.in API with SQLite caching
 
 local fetch = require("cosmic.fetch")
 local json = require("cosmic.json")
 local sqlite = require("cosmic.sqlite")
 local getopt = require("cosmo.getopt")
 local path = require("cosmo.path")
-local unix = require("cosmo.unix")
 
 local CACHE_TTL_SECONDS = 30 * 60  -- 30 minutes
 
@@ -81,13 +80,11 @@ local function save_weather(db, weather)
   return ok, err
 end
 
--- Fetch weather from OpenWeatherMap API
-local function fetch_weather(city, api_key)
-  local url = string.format(
-    "https://api.openweathermap.org/data/2.5/weather?q=%s&appid=%s&units=metric",
-    city:gsub(" ", "+"),
-    api_key
-  )
+-- Fetch weather from wttr.in API
+local function fetch_weather(city)
+  -- URL encode the city name
+  local encoded_city = city:gsub(" ", "+"):gsub(",", "%%2C")
+  local url = string.format("https://wttr.in/%s?format=j1", encoded_city)
 
   local result = fetch.Fetch(url)
 
@@ -96,28 +93,42 @@ local function fetch_weather(city, api_key)
   end
 
   if result.status ~= 200 then
-    local err_data = json.decode(result.body)
-    local message = err_data and err_data.message or "unknown error"
-    return nil, string.format("API error (%d): %s", result.status, message)
+    return nil, string.format("API error (%d)", result.status)
   end
 
-  local data = json.decode(result.body)
-  if not data or not data.main then
-    return nil, "invalid API response"
+  local ok, data = pcall(json.decode, result.body)
+  if not ok or not data then
+    return nil, "invalid API response: failed to parse JSON"
+  end
+
+  if not data.current_condition or not data.current_condition[1] then
+    return nil, "invalid API response: missing weather data"
+  end
+
+  local current = data.current_condition[1]
+
+  -- Get location name from response
+  local location = city
+  if data.nearest_area and data.nearest_area[1] then
+    local area = data.nearest_area[1]
+    if area.areaName and area.areaName[1] then
+      location = area.areaName[1].value
+    end
   end
 
   local conditions = "Unknown"
-  if data.weather and data.weather[1] then
-    conditions = data.weather[1].description or data.weather[1].main or "Unknown"
-    -- Capitalize first letter
-    conditions = conditions:sub(1, 1):upper() .. conditions:sub(2)
+  if current.weatherDesc and current.weatherDesc[1] then
+    conditions = current.weatherDesc[1].value or "Unknown"
   end
 
+  local temp = tonumber(current.temp_C) or 0
+  local humidity = tonumber(current.humidity) or 0
+
   return {
-    city = data.name or city,
-    temperature = data.main.temp,
+    city = location,
+    temperature = temp,
     conditions = conditions,
-    humidity = data.main.humidity,
+    humidity = humidity,
     timestamp = os.time()
   }
 end
@@ -138,23 +149,19 @@ local function usage()
   print("Usage: weather [options] <city>")
   print("")
   print("Options:")
-  print("  -k, --api-key KEY    OpenWeatherMap API key (or set WEATHER_API_KEY)")
-  print("  -h, --help           Show this help message")
+  print("  -h, --help    Show this help message")
   print("")
   print("Examples:")
   print("  weather London")
-  print("  weather --api-key YOUR_KEY \"New York\"")
-  print("  WEATHER_API_KEY=YOUR_KEY weather Paris")
+  print("  weather \"New York\"")
+  print("  weather Paris")
 end
 
 -- Main function
 local function main()
-  local parser = getopt.new(arg, "hk:", {
+  local parser = getopt.new(arg, "h", {
     {"help", "none", "h"},
-    {"api-key", "required", "k"},
   })
-
-  local api_key = os.getenv("WEATHER_API_KEY")
 
   while true do
     local opt, optarg = parser:next()
@@ -162,8 +169,6 @@ local function main()
     if opt == "h" or opt == "help" then
       usage()
       os.exit(0)
-    elseif opt == "k" or opt == "api-key" then
-      api_key = optarg
     elseif opt == "?" then
       io.stderr:write("Unknown option: " .. (optarg or "") .. "\n")
       usage()
@@ -179,11 +184,6 @@ local function main()
   end
 
   local city = remaining[1]
-
-  if not api_key then
-    io.stderr:write("Error: API key required. Set WEATHER_API_KEY or use --api-key\n")
-    os.exit(1)
-  end
 
   -- Open database
   local db, db_err = sqlite.open(get_db_path())
@@ -211,7 +211,7 @@ local function main()
   end
 
   -- Try to fetch fresh data
-  local weather, fetch_err = fetch_weather(city, api_key)
+  local weather, fetch_err = fetch_weather(city)
 
   if weather then
     -- Successfully fetched, update cache
