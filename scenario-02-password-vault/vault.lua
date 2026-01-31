@@ -285,6 +285,22 @@ local function main()
         return
     end
 
+    -- Check if command is valid before opening database
+    local valid_commands = {add = true, get = true, list = true, update = true, delete = true}
+
+    if not valid_commands[command] then
+        print("Usage: vault <command> [args]")
+        print("")
+        print("Commands:")
+        print("  init                      Initialize the vault with a master password")
+        print("  add <service> <username>  Add a new password entry")
+        print("  get <service>             Retrieve a password")
+        print("  list                      List all stored services")
+        print("  update <service>          Update a password")
+        print("  delete <service>          Delete a password entry")
+        os.exit(1)
+    end
+
     -- All other commands require an initialized vault
     local db = open_database()
     init_database(db)
@@ -308,17 +324,6 @@ local function main()
         cmd_update(db, arg[2])
     elseif command == "delete" then
         cmd_delete(db, arg[2])
-    else
-        print("Usage: vault <command> [args]")
-        print("")
-        print("Commands:")
-        print("  init                      Initialize the vault with a master password")
-        print("  add <service> <username>  Add a new password entry")
-        print("  get <service>             Retrieve a password")
-        print("  list                      List all stored services")
-        print("  update <service>          Update a password")
-        print("  delete <service>          Delete a password entry")
-        os.exit(1)
     end
 
     db:close()
