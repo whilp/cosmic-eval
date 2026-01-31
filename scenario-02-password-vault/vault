@@ -1,0 +1,4 @@
+#!/bin/bash
+# Wrapper script for vault.lua
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$DIR/cosmic-lua" "$DIR/vault.lua" "$@"
