@@ -1,0 +1,7 @@
+#!/bin/bash
+# Wrapper script for weather cache tool
+# Uses wttr.in by default (no API key required)
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+exec "$SCRIPT_DIR/cosmic-lua" "$SCRIPT_DIR/weather-wttr.lua" "$@"
