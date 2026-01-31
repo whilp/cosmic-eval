@@ -1,0 +1,232 @@
+#!/usr/bin/env cosmic-lua
+
+local cosmo = require("cosmo")
+local sqlite = require("cosmo.lsqlite3")
+local path = require("cosmo.path")
+local unix = require("cosmo.unix")
+
+local CACHE_EXPIRY_SECONDS = 30 * 60  -- 30 minutes
+local DB_PATH = path.join(os.getenv("HOME") or "/tmp", ".weather_cache.db")
+
+-- Get API key from environment
+local function get_api_key()
+    local key = os.getenv("OPENWEATHERMAP_API_KEY") or os.getenv("WEATHER_API_KEY")
+    if not key or key == "" then
+        return nil, "API key not set. Set OPENWEATHERMAP_API_KEY or WEATHER_API_KEY environment variable."
+    end
+    return key
+end
+
+-- Initialize SQLite database
+local function init_db()
+    local db = sqlite.open(DB_PATH)
+    if not db then
+        return nil, "Failed to open database: " .. DB_PATH
+    end
+
+    local create_sql = [[
+        CREATE TABLE IF NOT EXISTS weather_cache (
+            city TEXT PRIMARY KEY,
+            temperature REAL,
+            conditions TEXT,
+            humidity INTEGER,
+            timestamp INTEGER
+        )
+    ]]
+
+    local result = db:exec(create_sql)
+    if result ~= sqlite.OK then
+        db:close()
+        return nil, "Failed to create table: " .. db:errmsg()
+    end
+
+    return db
+end
+
+-- Get cached weather data
+local function get_cached(db, city)
+    local stmt = db:prepare("SELECT temperature, conditions, humidity, timestamp FROM weather_cache WHERE city = ?")
+    if not stmt then
+        return nil
+    end
+
+    stmt:bind_values(city:lower())
+    local row = stmt:step()
+
+    if row == sqlite.ROW then
+        local data = {
+            temperature = stmt:get_value(0),
+            conditions = stmt:get_value(1),
+            humidity = stmt:get_value(2),
+            timestamp = stmt:get_value(3)
+        }
+        stmt:finalize()
+        return data
+    end
+
+    stmt:finalize()
+    return nil
+end
+
+-- Save weather data to cache
+local function save_cache(db, city, data)
+    local stmt = db:prepare([[
+        INSERT OR REPLACE INTO weather_cache (city, temperature, conditions, humidity, timestamp)
+        VALUES (?, ?, ?, ?, ?)
+    ]])
+
+    if not stmt then
+        return false, "Failed to prepare statement: " .. db:errmsg()
+    end
+
+    stmt:bind_values(city:lower(), data.temperature, data.conditions, data.humidity, data.timestamp)
+    local result = stmt:step()
+    stmt:finalize()
+
+    return result == sqlite.DONE
+end
+
+-- Fetch weather from OpenWeatherMap API
+local function fetch_weather(api_key, city)
+    local url = string.format(
+        "https://api.openweathermap.org/data/2.5/weather?q=%s&appid=%s&units=metric",
+        cosmo.EncodeURIComponent(city),
+        api_key
+    )
+
+    local status, headers, body = cosmo.Fetch(url)
+
+    if not status then
+        return nil, "Network error: " .. tostring(headers)
+    end
+
+    if status == 401 then
+        return nil, "Invalid API key"
+    end
+
+    if status == 404 then
+        return nil, "City not found: " .. city
+    end
+
+    if status ~= 200 then
+        return nil, "API error (status " .. status .. ")"
+    end
+
+    local ok, data = pcall(cosmo.DecodeJson, body)
+    if not ok or not data then
+        return nil, "Failed to parse API response"
+    end
+
+    if not data.main or not data.weather then
+        return nil, "Unexpected API response format"
+    end
+
+    local conditions = "Unknown"
+    if data.weather[1] and data.weather[1].description then
+        conditions = data.weather[1].description
+    end
+
+    return {
+        temperature = data.main.temp,
+        conditions = conditions,
+        humidity = data.main.humidity,
+        timestamp = os.time()
+    }
+end
+
+-- Format time ago string
+local function time_ago(timestamp)
+    local diff = os.time() - timestamp
+    if diff < 60 then
+        return diff .. " seconds ago"
+    elseif diff < 3600 then
+        local mins = math.floor(diff / 60)
+        return mins .. " minute" .. (mins == 1 and "" or "s") .. " ago"
+    else
+        local hours = math.floor(diff / 3600)
+        return hours .. " hour" .. (hours == 1 and "" or "s") .. " ago"
+    end
+end
+
+-- Display weather data
+local function display_weather(city, data, source)
+    local temp_str = string.format("%.0f", data.temperature)
+    local conditions = data.conditions:sub(1,1):upper() .. data.conditions:sub(2)
+
+    print(string.format("%s: %s°C, %s, Humidity: %d%%", city, temp_str, conditions, data.humidity))
+    print(string.format("(%s)", source))
+end
+
+-- Main function
+local function main()
+    local city = arg[1]
+
+    if not city or city == "" or city == "-h" or city == "--help" then
+        io.stderr:write("Usage: weather <city>\n")
+        io.stderr:write("  Fetches weather data with local caching.\n\n")
+        io.stderr:write("Environment variables:\n")
+        io.stderr:write("  OPENWEATHERMAP_API_KEY - Your OpenWeatherMap API key\n")
+        io.stderr:write("  WEATHER_API_KEY        - Alternative API key variable\n")
+        os.exit(1)
+    end
+
+    local api_key, key_err = get_api_key()
+
+    local db, db_err = init_db()
+    if not db then
+        io.stderr:write("Error: " .. db_err .. "\n")
+        os.exit(1)
+    end
+
+    local cached = get_cached(db, city)
+    local now = os.time()
+
+    -- Check if cache is fresh (within 30 minutes)
+    if cached and (now - cached.timestamp) < CACHE_EXPIRY_SECONDS then
+        display_weather(city, cached, "Cached data from " .. time_ago(cached.timestamp))
+        db:close()
+        return
+    end
+
+    -- Need to fetch from API
+    if not api_key then
+        if cached then
+            -- Serve stale cache with warning
+            io.stderr:write("Warning: " .. key_err .. " Using stale cache.\n")
+            display_weather(city, cached, "Stale cached data from " .. time_ago(cached.timestamp))
+            db:close()
+            return
+        else
+            io.stderr:write("Error: " .. key_err .. "\n")
+            db:close()
+            os.exit(1)
+        end
+    end
+
+    local data, fetch_err = fetch_weather(api_key, city)
+
+    if not data then
+        if cached then
+            -- API failed but we have stale cache
+            io.stderr:write("Warning: " .. fetch_err .. " Using stale cache.\n")
+            display_weather(city, cached, "Stale cached data from " .. time_ago(cached.timestamp))
+            db:close()
+            return
+        else
+            io.stderr:write("Error: " .. fetch_err .. "\n")
+            db:close()
+            os.exit(1)
+        end
+    end
+
+    -- Save to cache and display
+    local saved, save_err = save_cache(db, city, data)
+    if not saved then
+        io.stderr:write("Warning: Failed to cache data: " .. tostring(save_err) .. "\n")
+    end
+
+    display_weather(city, data, "Data fetched from API")
+    db:close()
+end
+
+main()
