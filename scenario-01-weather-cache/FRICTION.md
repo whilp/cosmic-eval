@@ -45,6 +45,36 @@ Having everything bundled in one ~6MB binary that includes Lua, SQLite, HTTP cli
 
 ## Friction Points
 
+### Missed the Welcome Experience
+**Issue:** The welcome message with quick-start tips only appears when entering the interactive REPL, not when using `-e` or running scripts.
+
+My natural workflow was to test things incrementally with `-e`:
+```bash
+./bin/cosmic-lua -e 'print("Hello")'
+./bin/cosmic-lua -e 'local cosmo = require("cosmo"); ...'
+```
+
+I never entered the REPL, so I never saw:
+```
+Welcome to cosmic-lua!
+
+Quick start:
+  cosmic --docs <query>    search documentation
+  cosmic --help            show all options
+  help()                   search docs from REPL
+```
+
+This meant I didn't know about `--docs` or `--help` until much later when explicitly asked to check `--welcome`.
+
+**Root cause:** The welcome is gated on `is_tty and REPL mode` (see `main.tl:257`). Using `-e` bypasses the REPL entirely.
+
+**Impact:** I manually enumerated functions with `for k,v in pairs(cosmo)` when `--docs cosmo` would have shown me everything with documentation.
+
+**Suggestion:** Consider showing welcome on first `-e` usage too, or at least print a one-liner like:
+```
+Tip: Run 'cosmic --help' to see available options
+```
+
 ### Module Path Discovery
 **Issue:** No obvious way to discover what modules are available.
 
@@ -91,19 +121,23 @@ The `-v` flag shows "Lua 5.4" but not the cosmic-lua version itself.
 
 **Suggestion:** Add `--version` to show both cosmic-lua release and Lua version.
 
-### API Discovery Requires Introspection
-**Issue:** No built-in help or documentation accessible from the binary.
+### API Discovery - The Docs I Didn't Know Existed
+**Issue:** I didn't know `--docs` existed because I never saw the welcome message.
 
-I had to dump all functions to understand what was available:
+What I did (the hard way):
 ```lua
 for k, v in pairs(require("cosmo")) do print(k, type(v)) end
 ```
 
-This showed 90+ functions with no indication of what they do or how to call them.
+What I should have done:
+```bash
+cosmic-lua --docs cosmo
+cosmic-lua --docs EscapeParam
+```
 
-**Suggestion:**
-- `cosmic-lua --help cosmo` to list available functions
-- `cosmic-lua --help cosmo.Fetch` to show function signature/docs
+The documentation system exists and is good! But the welcome message that tells you about it only appears in interactive REPL mode. Since I used `-e` exclusively, I never discovered it.
+
+**This is the core friction:** The tool has good docs, but the pathway to discovering them is too narrow.
 
 ### Shebang Path
 **Minor issue:** I used `#!/usr/bin/env cosmic-lua` in my script, but this requires cosmic-lua to be in PATH. Since I'm using a local binary in `./bin/cosmic-lua`, I had to invoke it explicitly:
@@ -117,13 +151,13 @@ Not really a friction point, just a deployment consideration.
 
 | Aspect | Rating | Notes |
 |--------|--------|-------|
-| Getting started | ⭐⭐⭐⭐ | Download binary, run - simple |
+| Getting started | ⭐⭐⭐ | Welcome only shows in REPL, missed it entirely |
 | SQLite | ⭐⭐⭐⭐⭐ | Standard API, no surprises |
 | HTTP client | ⭐⭐⭐⭐ | Clean interface |
 | JSON | ⭐⭐⭐⭐⭐ | Works as expected |
 | API discoverability | ⭐⭐ | Had to enumerate functions manually |
 | URL encoding | ⭐⭐ | Many functions, unclear which to use |
-| Documentation | ⭐ | No docs accessible from tool |
+| Documentation | ⭐⭐⭐ | `--docs` exists but I didn't know about it! |
 | Error messages | ⭐⭐⭐⭐⭐ | "Did you mean?" is excellent |
 
 ## Time Spent
