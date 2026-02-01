@@ -396,9 +396,7 @@ function Executor.run_all(tasks, task_order, opts)
                     end
                 end
             else
-                io.write(string.format("[%d/%d] %s: %s",
-                    completed_count + 1, total, name, task.command))
-                io.flush()
+                -- Just track that task started; result will print when done
 
                 local stdout_r, stdout_w = unix.pipe()
                 local stderr_r, stderr_w = unix.pipe()
@@ -520,7 +518,8 @@ function Executor.run_all(tasks, task_order, opts)
                 }
                 completed_count = completed_count + 1
 
-                print(" ... " .. status:upper() .. " (" .. format_duration(duration_ms) .. ")")
+                print(string.format("[%d/%d] %s", completed_count, total,
+                    format_status(name, proc.task.command, status, duration_ms)))
 
                 if db then
                     DB.insert_task(db, run_id, name, proc.task.command, status,
