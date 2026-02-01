@@ -14,6 +14,9 @@ if not scenario then
   os.exit(1)
 end
 
+-- Claude binary installed by Makefile
+local claude_bin = "o/node_modules/.bin/claude"
+
 local scenario_dir = scenario
 local readme_path = path.join(scenario_dir, "README.md")
 
@@ -51,7 +54,7 @@ print("")
 
 -- Run claude -p with the prompt
 local result = spawn.run({
-  "claude",
+  claude_bin,
   "-p", prompt,
   "--output-format", "text",
 }, {
