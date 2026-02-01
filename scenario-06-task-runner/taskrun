@@ -1,0 +1,851 @@
+#!/usr/bin/env lua
+-- taskrun: Parallel task runner with dependency management and SQLite storage
+
+local unix = require("cosmo.unix")
+local path = require("cosmo.path")
+local sqlite3 = require("cosmo.lsqlite3")
+
+--------------------------------------------------------------------------------
+-- Database module
+--------------------------------------------------------------------------------
+
+local DB = {}
+
+function DB.open(db_path)
+    local db = sqlite3.open(db_path)
+    db:exec([[
+        create table if not exists runs (
+            id integer primary key autoincrement,
+            started_at integer not null,
+            finished_at integer,
+            total_tasks integer not null,
+            passed integer default 0,
+            failed integer default 0,
+            skipped integer default 0
+        );
+
+        create table if not exists tasks (
+            id integer primary key autoincrement,
+            run_id integer not null references runs(id),
+            name text not null,
+            command text not null,
+            status text,
+            exit_code integer,
+            started_at integer,
+            finished_at integer,
+            duration_ms integer,
+            stdout text,
+            stderr text
+        );
+
+        create index if not exists idx_tasks_run_id on tasks(run_id);
+    ]])
+    return db
+end
+
+function DB.create_run(db, total_tasks)
+    local now = os.time()
+    db:exec(string.format(
+        "insert into runs (started_at, total_tasks, passed, failed, skipped) values (%d, %d, 0, 0, 0)",
+        now, total_tasks
+    ))
+    return db:last_insert_rowid()
+end
+
+function DB.finish_run(db, run_id, passed, failed, skipped)
+    local now = os.time()
+    db:exec(string.format(
+        "update runs set finished_at = %d, passed = %d, failed = %d, skipped = %d where id = %d",
+        now, passed, failed, skipped, run_id
+    ))
+end
+
+function DB.insert_task(db, run_id, name, command, status, exit_code, started_at, finished_at, duration_ms, stdout_data, stderr_data)
+    local stmt = db:prepare([[
+        insert into tasks (run_id, name, command, status, exit_code, started_at, finished_at, duration_ms, stdout, stderr)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ]])
+    stmt:bind_values(run_id, name, command, status, exit_code, started_at, finished_at, duration_ms, stdout_data, stderr_data)
+    stmt:step()
+    stmt:finalize()
+end
+
+function DB.get_runs(db, limit)
+    limit = limit or 10
+    local runs = {}
+    for row in db:nrows(string.format(
+        "select id, started_at, finished_at, total_tasks, passed, failed, skipped from runs order by id desc limit %d", limit
+    )) do
+        table.insert(runs, row)
+    end
+    return runs
+end
+
+function DB.get_run(db, run_id)
+    for row in db:nrows(string.format(
+        "select id, started_at, finished_at, total_tasks, passed, failed, skipped from runs where id = %d", run_id
+    )) do
+        return row
+    end
+    return nil
+end
+
+function DB.get_tasks_for_run(db, run_id)
+    local tasks = {}
+    for row in db:nrows(string.format(
+        "select name, command, status, exit_code, started_at, finished_at, duration_ms, stdout, stderr from tasks where run_id = %d order by id", run_id
+    )) do
+        table.insert(tasks, row)
+    end
+    return tasks
+end
+
+function DB.get_task(db, run_id, task_name)
+    for row in db:nrows(string.format(
+        "select name, command, status, exit_code, started_at, finished_at, duration_ms, stdout, stderr from tasks where run_id = %d and name = '%s'",
+        run_id, task_name:gsub("'", "''")
+    )) do
+        return row
+    end
+    return nil
+end
+
+function DB.get_failed_tasks(db, run_id)
+    local tasks = {}
+    for row in db:nrows(string.format(
+        "select name, command from tasks where run_id = %d and status in ('failed', 'skipped', 'timeout') order by id", run_id
+    )) do
+        table.insert(tasks, row)
+    end
+    return tasks
+end
+
+--------------------------------------------------------------------------------
+-- Task parser module
+--------------------------------------------------------------------------------
+
+local Parser = {}
+
+function Parser.parse_file(filepath)
+    local f = io.open(filepath, "r")
+    if not f then
+        return nil, "cannot open file: " .. filepath
+    end
+
+    local tasks = {}
+    local task_order = {}
+    local line_num = 0
+
+    for line in f:lines() do
+        line_num = line_num + 1
+        line = line:match("^%s*(.-)%s*$")
+
+        if line ~= "" and not line:match("^#") then
+            local name, rest = line:match("^([%w_]+):%s*(.+)$")
+            if not name then
+                f:close()
+                return nil, string.format("line %d: invalid task format", line_num)
+            end
+
+            if tasks[name] then
+                f:close()
+                return nil, string.format("line %d: duplicate task name '%s'", line_num, name)
+            end
+
+            local deps = {}
+            local command = rest
+            local dep_match = rest:match("%s*%[after:([^%]]+)%]%s*$")
+            if dep_match then
+                command = rest:match("^(.-)%s*%[after:")
+                for dep in dep_match:gmatch("([^,]+)") do
+                    dep = dep:match("^%s*(.-)%s*$")
+                    table.insert(deps, dep)
+                end
+            end
+
+            tasks[name] = {
+                name = name,
+                command = command,
+                deps = deps,
+                line = line_num
+            }
+            table.insert(task_order, name)
+        end
+    end
+
+    f:close()
+    return tasks, task_order
+end
+
+function Parser.validate_dependencies(tasks, task_order)
+    for _, name in ipairs(task_order) do
+        local task = tasks[name]
+        for _, dep in ipairs(task.deps) do
+            if not tasks[dep] then
+                return nil, string.format("task '%s': dependency '%s' does not exist", name, dep)
+            end
+        end
+    end
+
+    local visited = {}
+    local rec_stack = {}
+
+    local function has_cycle(name, path)
+        if rec_stack[name] then
+            table.insert(path, name)
+            return true, path
+        end
+        if visited[name] then
+            return false
+        end
+
+        visited[name] = true
+        rec_stack[name] = true
+        table.insert(path, name)
+
+        local task = tasks[name]
+        for _, dep in ipairs(task.deps) do
+            local cycle, cycle_path = has_cycle(dep, path)
+            if cycle then
+                return true, cycle_path
+            end
+        end
+
+        table.remove(path)
+        rec_stack[name] = false
+        return false
+    end
+
+    for _, name in ipairs(task_order) do
+        if not visited[name] then
+            local cycle, cycle_path = has_cycle(name, {})
+            if cycle then
+                return nil, "circular dependency detected: " .. table.concat(cycle_path, " -> ")
+            end
+        end
+    end
+
+    return true
+end
+
+function Parser.filter_for_task(tasks, task_order, target_name)
+    if not tasks[target_name] then
+        return nil, "task not found: " .. target_name
+    end
+
+    local needed = {}
+    local function collect_deps(name)
+        if needed[name] then return end
+        needed[name] = true
+        local task = tasks[name]
+        for _, dep in ipairs(task.deps) do
+            collect_deps(dep)
+        end
+    end
+    collect_deps(target_name)
+
+    local filtered_order = {}
+    for _, name in ipairs(task_order) do
+        if needed[name] then
+            table.insert(filtered_order, name)
+        end
+    end
+
+    return needed, filtered_order
+end
+
+--------------------------------------------------------------------------------
+-- Executor module
+--------------------------------------------------------------------------------
+
+local Executor = {}
+
+function Executor.get_cpu_count()
+    local f = io.open("/proc/cpuinfo", "r")
+    if not f then return 4 end
+    local count = 0
+    for line in f:lines() do
+        if line:match("^processor") then
+            count = count + 1
+        end
+    end
+    f:close()
+    return count > 0 and count or 4
+end
+
+-- Redirect fd to new_fd using dup (close new_fd first, then dup)
+local function redirect_fd(from_fd, to_fd)
+    unix.close(to_fd)
+    unix.dup(from_fd)
+end
+
+local function format_duration(ms)
+    return string.format("%.1fs", ms / 1000)
+end
+
+-- Get current time in milliseconds
+local function get_time_ms()
+    local sec, nsec = unix.clock_gettime()
+    return sec * 1000 + math.floor(nsec / 1000000)
+end
+
+-- Sleep for specified milliseconds
+local function sleep_ms(ms)
+    local sec = math.floor(ms / 1000)
+    local nsec = (ms % 1000) * 1000000
+    unix.nanosleep(sec, nsec)
+end
+
+local function format_status(name, command, status, duration_ms, max_len)
+    max_len = max_len or 40
+    local prefix = string.format("%s: %s", name, command)
+    if #prefix > max_len then
+        prefix = prefix:sub(1, max_len - 3) .. "..."
+    end
+    local dots = string.rep(".", math.max(3, 50 - #prefix))
+    local status_str = status:upper()
+    local duration_str = format_duration(duration_ms)
+    return string.format("%s %s %s (%s)", prefix, dots, status_str, duration_str)
+end
+
+function Executor.run_all(tasks, task_order, opts)
+    opts = opts or {}
+    local jobs = opts.jobs or Executor.get_cpu_count()
+    local timeout = opts.timeout or 60
+    local db = opts.db
+
+    local total = #task_order
+    local passed = 0
+    local failed = 0
+    local skipped = 0
+
+    local completed = {}
+    local running = {}
+    local pending = {}
+
+    local run_id
+    if db then
+        run_id = DB.create_run(db, total)
+    end
+
+    local dependents = {}
+    for _, name in ipairs(task_order) do
+        dependents[name] = {}
+    end
+    for _, name in ipairs(task_order) do
+        local task = tasks[name]
+        for _, dep in ipairs(task.deps) do
+            table.insert(dependents[dep], name)
+        end
+    end
+
+    local remaining_deps = {}
+    for _, name in ipairs(task_order) do
+        remaining_deps[name] = #tasks[name].deps
+    end
+
+    for _, name in ipairs(task_order) do
+        if remaining_deps[name] == 0 then
+            table.insert(pending, name)
+        end
+    end
+
+    local completed_count = 0
+    local max_output = 1024 * 1024
+
+    while completed_count < total do
+        -- Start new tasks if we have capacity
+        while #pending > 0 and Executor.count_map(running) < jobs do
+            local name = table.remove(pending, 1)
+            local task = tasks[name]
+
+            local dep_failed = false
+            for _, dep in ipairs(task.deps) do
+                local dep_result = completed[dep]
+                if dep_result and dep_result.status ~= "passed" then
+                    dep_failed = true
+                    break
+                end
+            end
+
+            if dep_failed then
+                completed[name] = {
+                    status = "skipped",
+                    exit_code = nil,
+                    started_at = os.time(),
+                    finished_at = os.time(),
+                    duration_ms = 0,
+                    stdout = "",
+                    stderr = ""
+                }
+                completed_count = completed_count + 1
+                skipped = skipped + 1
+
+                print(string.format("[%d/%d] %s ... SKIPPED (dependency failed)",
+                    completed_count, total, name))
+
+                if db then
+                    DB.insert_task(db, run_id, name, task.command, "skipped",
+                        nil, os.time(), os.time(), 0, "", "")
+                end
+
+                for _, dep_name in ipairs(dependents[name]) do
+                    remaining_deps[dep_name] = remaining_deps[dep_name] - 1
+                    if remaining_deps[dep_name] == 0 and not completed[dep_name] then
+                        table.insert(pending, dep_name)
+                    end
+                end
+            else
+                io.write(string.format("[%d/%d] %s: %s",
+                    completed_count + 1, total, name, task.command))
+                io.flush()
+
+                local stdout_r, stdout_w = unix.pipe()
+                local stderr_r, stderr_w = unix.pipe()
+
+                local pid = unix.fork()
+
+                if pid == 0 then
+                    -- Child process
+                    unix.close(stdout_r)
+                    unix.close(stderr_r)
+
+                    -- Redirect stdout (fd 1) to stdout_w
+                    unix.close(1)
+                    unix.dup(stdout_w)
+                    unix.close(stdout_w)
+
+                    -- Redirect stderr (fd 2) to stderr_w
+                    unix.close(2)
+                    unix.dup(stderr_w)
+                    unix.close(stderr_w)
+
+                    unix.execvp("/bin/sh", {"/bin/sh", "-c", task.command})
+                    unix.exit(127)
+                end
+
+                unix.close(stdout_w)
+                unix.close(stderr_w)
+                unix.fcntl(stdout_r, unix.F_SETFL, unix.O_NONBLOCK)
+                unix.fcntl(stderr_r, unix.F_SETFL, unix.O_NONBLOCK)
+
+                running[name] = {
+                    pid = pid,
+                    task = task,
+                    started_at = os.time(),
+                    start_ms = get_time_ms(),
+                    stdout_r = stdout_r,
+                    stderr_r = stderr_r,
+                    stdout_data = {},
+                    stderr_data = {},
+                    stdout_len = 0,
+                    stderr_len = 0
+                }
+            end
+        end
+
+        -- Poll running tasks
+        for name, proc in pairs(running) do
+            local chunk = unix.read(proc.stdout_r, 4096)
+            if chunk and #chunk > 0 and proc.stdout_len < max_output then
+                table.insert(proc.stdout_data, chunk)
+                proc.stdout_len = proc.stdout_len + #chunk
+            end
+
+            chunk = unix.read(proc.stderr_r, 4096)
+            if chunk and #chunk > 0 and proc.stderr_len < max_output then
+                table.insert(proc.stderr_data, chunk)
+                proc.stderr_len = proc.stderr_len + #chunk
+            end
+
+            local wait_pid, wait_status = unix.wait(proc.pid, unix.WNOHANG)
+            local timed_out = false
+
+            if not wait_pid or wait_pid == 0 then
+                local elapsed = get_time_ms() - proc.start_ms
+                if elapsed > timeout * 1000 then  -- timeout is in seconds, elapsed in ms
+                    unix.kill(proc.pid, unix.SIGTERM)
+                    sleep_ms(100)
+                    unix.kill(proc.pid, unix.SIGKILL)
+                    wait_pid, wait_status = unix.wait(proc.pid)
+                    timed_out = true
+                end
+            end
+
+            if wait_pid and wait_pid > 0 then
+                -- Read remaining output
+                while true do
+                    local c = unix.read(proc.stdout_r, 4096)
+                    if not c or #c == 0 then break end
+                    if proc.stdout_len < max_output then
+                        table.insert(proc.stdout_data, c)
+                        proc.stdout_len = proc.stdout_len + #c
+                    end
+                end
+                while true do
+                    local c = unix.read(proc.stderr_r, 4096)
+                    if not c or #c == 0 then break end
+                    if proc.stderr_len < max_output then
+                        table.insert(proc.stderr_data, c)
+                        proc.stderr_len = proc.stderr_len + #c
+                    end
+                end
+
+                unix.close(proc.stdout_r)
+                unix.close(proc.stderr_r)
+
+                local duration_ms = get_time_ms() - proc.start_ms
+                local status
+                local exit_code = unix.WEXITSTATUS(wait_status)
+
+                if timed_out then
+                    status = "timeout"
+                    failed = failed + 1
+                elseif unix.WIFEXITED(wait_status) and exit_code == 0 then
+                    status = "passed"
+                    passed = passed + 1
+                else
+                    status = "failed"
+                    failed = failed + 1
+                end
+
+                completed[name] = {
+                    status = status,
+                    exit_code = exit_code,
+                    started_at = proc.started_at,
+                    finished_at = os.time(),
+                    duration_ms = duration_ms,
+                    stdout = table.concat(proc.stdout_data),
+                    stderr = table.concat(proc.stderr_data)
+                }
+                completed_count = completed_count + 1
+
+                print(" ... " .. status:upper() .. " (" .. format_duration(duration_ms) .. ")")
+
+                if db then
+                    DB.insert_task(db, run_id, name, proc.task.command, status,
+                        exit_code, proc.started_at, os.time(), duration_ms,
+                        table.concat(proc.stdout_data), table.concat(proc.stderr_data))
+                end
+
+                running[name] = nil
+
+                for _, dep_name in ipairs(dependents[name]) do
+                    remaining_deps[dep_name] = remaining_deps[dep_name] - 1
+                    if remaining_deps[dep_name] == 0 and not completed[dep_name] then
+                        table.insert(pending, dep_name)
+                    end
+                end
+            end
+        end
+
+        -- Small sleep to avoid busy loop
+        if Executor.count_map(running) > 0 or #pending > 0 then
+            sleep_ms(10)
+        end
+    end
+
+    if db then
+        DB.finish_run(db, run_id, passed, failed, skipped)
+    end
+
+    return {
+        run_id = run_id,
+        passed = passed,
+        failed = failed,
+        skipped = skipped,
+        total = total
+    }
+end
+
+function Executor.count_map(t)
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    return count
+end
+
+--------------------------------------------------------------------------------
+-- CLI module
+--------------------------------------------------------------------------------
+
+local CLI = {}
+
+function CLI.parse_args(args)
+    local cmd = args[1]
+    local opts = {
+        taskfile = nil,
+        jobs = nil,
+        timeout = 60,
+        task = nil,
+        run_id = nil,
+        db_path = "taskrun.db"
+    }
+
+    local i = 2
+    while i <= #args do
+        local arg = args[i]
+        if arg == "--jobs" or arg == "-j" then
+            i = i + 1
+            opts.jobs = tonumber(args[i])
+        elseif arg == "--timeout" or arg == "-t" then
+            i = i + 1
+            opts.timeout = tonumber(args[i])
+        elseif arg == "--task" then
+            i = i + 1
+            opts.task = args[i]
+        elseif arg == "--db" then
+            i = i + 1
+            opts.db_path = args[i]
+        elseif not opts.taskfile and not opts.run_id then
+            if cmd == "run" then
+                opts.taskfile = arg
+            elseif cmd == "show" or cmd == "retry" then
+                opts.run_id = tonumber(arg)
+            end
+        end
+        i = i + 1
+    end
+
+    return cmd, opts
+end
+
+function CLI.cmd_run(opts)
+    if not opts.taskfile then
+        io.stderr:write("usage: taskrun run <taskfile> [--jobs N] [--timeout S] [--task NAME]\n")
+        os.exit(1)
+    end
+
+    local tasks, task_order = Parser.parse_file(opts.taskfile)
+    if not tasks then
+        io.stderr:write("error: " .. task_order .. "\n")
+        os.exit(1)
+    end
+
+    if #task_order == 0 then
+        print("No tasks to run")
+        return
+    end
+
+    local ok, err = Parser.validate_dependencies(tasks, task_order)
+    if not ok then
+        io.stderr:write("error: " .. err .. "\n")
+        os.exit(1)
+    end
+
+    if opts.task then
+        local needed, filtered = Parser.filter_for_task(tasks, task_order, opts.task)
+        if not needed then
+            io.stderr:write("error: " .. filtered .. "\n")
+            os.exit(1)
+        end
+        task_order = filtered
+    end
+
+    local db = DB.open(opts.db_path)
+
+    local result = Executor.run_all(tasks, task_order, {
+        jobs = opts.jobs,
+        timeout = opts.timeout,
+        db = db,
+        db_path = opts.db_path
+    })
+
+    db:close()
+
+    print("")
+    print(string.format("Run completed: %d passed, %d failed, %d skipped",
+        result.passed, result.failed, result.skipped))
+    print(string.format("Results saved to: %s (run #%d)", opts.db_path, result.run_id))
+
+    if result.failed > 0 then
+        os.exit(1)
+    end
+end
+
+function CLI.cmd_history(opts)
+    local db = DB.open(opts.db_path)
+    local runs = DB.get_runs(db, 10)
+    db:close()
+
+    if #runs == 0 then
+        print("No runs found")
+        return
+    end
+
+    print("Recent runs:")
+    for _, run in ipairs(runs) do
+        local duration = ""
+        if run.finished_at and run.started_at then
+            duration = string.format(" | %.1fs", run.finished_at - run.started_at)
+        end
+        print(string.format("  #%d | %s | %d passed, %d failed, %d skipped%s",
+            run.id,
+            os.date("%Y-%m-%d %H:%M:%S", run.started_at),
+            run.passed, run.failed, run.skipped,
+            duration))
+    end
+end
+
+function CLI.cmd_show(opts)
+    if not opts.run_id then
+        io.stderr:write("usage: taskrun show <run_id> [--task NAME]\n")
+        os.exit(1)
+    end
+
+    local db = DB.open(opts.db_path)
+    local run = DB.get_run(db, opts.run_id)
+
+    if not run then
+        db:close()
+        io.stderr:write("error: run not found\n")
+        os.exit(1)
+    end
+
+    if opts.task then
+        local task = DB.get_task(db, opts.run_id, opts.task)
+        db:close()
+
+        if not task then
+            io.stderr:write("error: task not found in run\n")
+            os.exit(1)
+        end
+
+        print(string.format("Task: %s", task.name))
+        print(string.format("Command: %s", task.command))
+        local exit_str = task.exit_code and string.format(" (exit code %d)", task.exit_code) or ""
+        print(string.format("Status: %s%s", task.status:upper(), exit_str))
+        print(string.format("Duration: %s", format_duration(task.duration_ms)))
+        print("")
+        print("--- stdout ---")
+        print(task.stdout or "")
+        print("")
+        print("--- stderr ---")
+        print(task.stderr or "")
+    else
+        local tasks_list = DB.get_tasks_for_run(db, opts.run_id)
+        db:close()
+
+        local duration = ""
+        if run.finished_at and run.started_at then
+            duration = string.format("\nDuration: %.1fs", run.finished_at - run.started_at)
+        end
+
+        print(string.format("Run #%d (%s)%s",
+            run.id, os.date("%Y-%m-%d %H:%M:%S", run.started_at), duration))
+        print("")
+        print("Tasks:")
+        for _, task in ipairs(tasks_list) do
+            local dots = string.rep(".", math.max(3, 20 - #task.name))
+            print(string.format("  %s %s %s (%s)",
+                task.name, dots, task.status:upper(), format_duration(task.duration_ms)))
+        end
+    end
+end
+
+function CLI.cmd_retry(opts)
+    if not opts.run_id then
+        io.stderr:write("usage: taskrun retry <run_id>\n")
+        os.exit(1)
+    end
+
+    local db = DB.open(opts.db_path)
+    local run = DB.get_run(db, opts.run_id)
+
+    if not run then
+        db:close()
+        io.stderr:write("error: run not found\n")
+        os.exit(1)
+    end
+
+    local failed_tasks = DB.get_failed_tasks(db, opts.run_id)
+    db:close()
+
+    if #failed_tasks == 0 then
+        print("No failed tasks to retry")
+        return
+    end
+
+    local tasks = {}
+    local task_order = {}
+    for _, t in ipairs(failed_tasks) do
+        tasks[t.name] = {
+            name = t.name,
+            command = t.command,
+            deps = {}
+        }
+        table.insert(task_order, t.name)
+    end
+
+    print(string.format("Retrying %d failed task(s) from run #%d...", #failed_tasks, opts.run_id))
+
+    db = DB.open(opts.db_path)
+    local result = Executor.run_all(tasks, task_order, {
+        jobs = opts.jobs,
+        timeout = opts.timeout,
+        db = db,
+        db_path = opts.db_path
+    })
+    db:close()
+
+    print("")
+    print(string.format("Run completed: %d passed, %d failed, %d skipped",
+        result.passed, result.failed, result.skipped))
+    print(string.format("Results saved to: %s (run #%d)", opts.db_path, result.run_id))
+
+    if result.failed > 0 then
+        os.exit(1)
+    end
+end
+
+function CLI.usage()
+    print([[taskrun - Parallel task runner
+
+Usage:
+  taskrun run <taskfile> [--jobs N] [--timeout S] [--task NAME] [--db PATH]
+  taskrun history [--db PATH]
+  taskrun show <run_id> [--task NAME] [--db PATH]
+  taskrun retry <run_id> [--db PATH]
+
+Commands:
+  run       Execute tasks from a task file
+  history   Show recent runs
+  show      Show details of a specific run
+  retry     Re-run failed tasks from a previous run
+
+Options:
+  --jobs N, -j N     Maximum concurrent tasks (default: number of CPUs)
+  --timeout S, -t S  Per-task timeout in seconds (default: 60)
+  --task NAME        Run only specific task and its dependencies
+  --db PATH          Database path (default: taskrun.db)]])
+end
+
+function CLI.main(args)
+    if #args == 0 then
+        CLI.usage()
+        os.exit(0)
+    end
+
+    local cmd, opts = CLI.parse_args(args)
+
+    if cmd == "run" then
+        CLI.cmd_run(opts)
+    elseif cmd == "history" then
+        CLI.cmd_history(opts)
+    elseif cmd == "show" then
+        CLI.cmd_show(opts)
+    elseif cmd == "retry" then
+        CLI.cmd_retry(opts)
+    elseif cmd == "--help" or cmd == "-h" or cmd == "help" then
+        CLI.usage()
+    else
+        io.stderr:write("unknown command: " .. cmd .. "\n")
+        CLI.usage()
+        os.exit(1)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Main
+--------------------------------------------------------------------------------
+
+CLI.main(arg)
