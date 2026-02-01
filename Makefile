@@ -24,15 +24,9 @@ help:
 	@echo "usage: make <target>"
 	@echo ""
 	@echo "targets:"
-	@echo "  eval             run all evals"
-	@echo "  eval only=X      run evals matching X"
-	@echo "  eval SCENARIO=X  run single scenario X"
-	@echo "  clean            remove build artifacts"
-
-# single scenario mode for CI matrix
-ifneq ($(SCENARIO),)
-results := $(o)/$(SCENARIO).got
-endif
+	@echo "  eval          run all evals"
+	@echo "  eval only=X   run evals matching X"
+	@echo "  clean         remove build artifacts"
 
 .PHONY: eval
 eval: $(o)/eval-summary.txt
