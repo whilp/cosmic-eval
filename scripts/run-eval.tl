@@ -25,7 +25,7 @@ if not prompt then
 end
 
 -- Create results directory
-local results_dir = path.join("results", scenario)
+local results_dir = path.join("o", scenario)
 unix.makedirs(results_dir, tonumber("755", 8))
 
 -- Create a temporary working directory

@@ -67,4 +67,4 @@ $(COSMIC): | $(o)/.
 
 .PHONY: clean
 clean:
-	rm -rf $(o) results
+	rm -rf $(o)

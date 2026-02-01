@@ -48,7 +48,7 @@ jobs:
         if: always()
         with:
           name: eval-${{ matrix.scenario }}
-          path: results/
+          path: o/${{ matrix.scenario }}/
           retention-days: 30
 
   summary:
