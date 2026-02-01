@@ -15,7 +15,7 @@ if not scenario then
 end
 
 -- Claude binary installed by Makefile
-local claude_bin = "o/node_modules/.bin/claude"
+local claude_bin = "o/claude"
 
 local scenario_dir = scenario
 local readme_path = path.join(scenario_dir, "README.md")
