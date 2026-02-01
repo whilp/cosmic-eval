@@ -1,0 +1,82 @@
+name: Evals
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6am UTC
+  workflow_dispatch:
+
+jobs:
+  list-scenarios:
+    runs-on: ubuntu-latest
+    outputs:
+      scenarios: ${{ steps.list.outputs.scenarios }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          scenarios=$(ls -d scenario-*/ | sed 's/\/$//' | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "scenarios=$scenarios" >> "$GITHUB_OUTPUT"
+
+  eval:
+    needs: list-scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: ${{ fromJson(needs.list-scenarios.outputs.scenarios) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run eval
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: make eval SCENARIO=${{ matrix.scenario }}
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-${{ matrix.scenario }}
+          path: results/
+          retention-days: 30
+
+  summary:
+    needs: eval
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          path: all-results
+          pattern: eval-*
+
+      - name: Summarize results
+        run: |
+          echo "## Eval Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          for dir in all-results/eval-*/; do
+            scenario=$(basename "$dir" | sed 's/eval-//')
+            exit_file=$(find "$dir" -name "exit_code.txt" | head -1)
+            if [[ -f "$exit_file" ]]; then
+              code=$(cat "$exit_file")
+              if [[ "$code" == "0" ]]; then
+                echo "- ✅ $scenario" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "- ❌ $scenario (exit $code)" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "- ⚠️ $scenario (no result)" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
