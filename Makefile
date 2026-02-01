@@ -31,22 +31,8 @@ help:
 .PHONY: eval
 eval: $(o)/eval-summary.txt
 
-$(o)/eval-summary.txt: $(results) | $(o)/.
-	@echo ""; echo "=== Summary ==="; \
-	passed=0; failed=0; \
-	for f in $(filter %.got,$^); do \
-		name=$$(basename $$f .got); \
-		code=$$(cat $$f); \
-		if [ "$$code" = "0" ]; then \
-			echo "✅ $$name"; \
-			passed=$$((passed + 1)); \
-		else \
-			echo "❌ $$name (exit $$code)"; \
-			failed=$$((failed + 1)); \
-		fi; \
-	done; \
-	echo ""; echo "Passed: $$passed  Failed: $$failed"; \
-	[ "$$failed" = "0" ]
+$(o)/eval-summary.txt: $(results) $(COSMIC) | $(o)/.
+	@$(COSMIC) scripts/summarize.tl $(filter %.got,$^) | tee $@
 
 $(o)/%.got: % $(COSMIC) | $$(@D)/.
 	@echo "Running: $<"
