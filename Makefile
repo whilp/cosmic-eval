@@ -65,9 +65,9 @@ $(o)/%.got: % $(COSMIC) $(CLAUDE) | $$(@D)/.
 # Generate download rules for each dep
 define dep_rule
 $($(1)_path): | $(o)/.
-	curl -fsSL -o $$@ $($(1)_url)
+	@curl -fsSL -o $$@ $($(1)_url)
 	@echo "$($(1)_sha)  $$@" | sha256sum -c -
-	chmod +x $$@
+	@chmod +x $$@
 endef
 $(foreach d,$(deps),$(eval $(call dep_rule,$(d))))
 
