@@ -30,7 +30,7 @@ Use `grade.tl` to compute objective metrics:
 
 ```bash
 cd /tmp/eval-artifacts/eval-scenario-*/
-lua /path/to/skills/grade-friction/grade.tl conversation.jsonl *.lua
+cosmic /path/to/skills/grade-friction/grade.tl conversation.jsonl *.lua
 ```
 
 This outputs JSON with:
@@ -66,7 +66,18 @@ This outputs JSON with:
 - `lsqlite3` - raw SQLite (should use cosmic.sqlite)
 - `cosmo.` - low-level API (should use cosmic.* wrapper if available)
 
-### 4. Subjective analysis from FRICTION.md
+### 4. Read all artifacts
+
+Read all files in the artifact directory:
+
+- **FRICTION.md** - Agent's self-reported friction
+- **output.txt** - Final output/summary from agent
+- **conversation.jsonl** - Full session log (parsed by grade.tl)
+- **\*.lua** - Implementation files (scanned for escape hatches)
+- **README.md** - Original scenario prompt
+- **\*.md** - Any other documentation created
+
+### 5. Subjective analysis from FRICTION.md
 
 Read FRICTION.md and extract:
 
@@ -81,7 +92,7 @@ Read FRICTION.md and extract:
 
 **What Went Well**: Positive signal about cosmic-lua
 
-### 5. Generate issue suggestions
+### 6. Generate issue suggestions
 
 For each friction point, suggest a GitHub issue:
 
