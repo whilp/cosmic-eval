@@ -2,7 +2,7 @@ name: Evals
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # Daily at 6am UTC
+    - cron: '0 6 * * 1'  # Weekly on Mondays at 6am UTC
   workflow_dispatch:
     inputs:
       only:
