@@ -13,6 +13,13 @@ local record EscapeHatch
   code: string
 end
 
+local record TokenUsage
+  input_tokens: integer
+  output_tokens: integer
+  cache_creation_input_tokens: integer
+  cache_read_input_tokens: integer
+end
+
 local record Metrics
   total_messages: integer
   assistant_turns: integer
@@ -24,6 +31,12 @@ local record Metrics
   last_timestamp: string
   duration_seconds: integer
   escape_hatches: {EscapeHatch}
+  -- Token usage
+  api_calls: integer
+  input_tokens: integer
+  output_tokens: integer
+  cache_creation_tokens: integer
+  cache_read_tokens: integer
 end
 
 local record ContentBlock
@@ -31,8 +44,16 @@ local record ContentBlock
   name: string
 end
 
+local record MessageUsage
+  input_tokens: integer
+  output_tokens: integer
+  cache_creation_input_tokens: integer
+  cache_read_input_tokens: integer
+end
+
 local record Message
   content: {ContentBlock}
+  usage: MessageUsage
 end
 
 local record ConversationEntry
@@ -91,6 +112,12 @@ local metrics: Metrics = {
   last_timestamp = nil,
   duration_seconds = nil,
   escape_hatches = {},
+  -- Token usage
+  api_calls = 0,
+  input_tokens = 0,
+  output_tokens = 0,
+  cache_creation_tokens = 0,
+  cache_read_tokens = 0,
 }
 
 local tools_seen: {string: boolean} = {}
@@ -120,6 +147,16 @@ for _, msg in ipairs(messages) do
           tools_seen[name] = true
         end
       end
+    end
+
+    -- Sum token usage
+    if msg.message and msg.message.usage then
+      local u = msg.message.usage
+      metrics.api_calls = metrics.api_calls + 1
+      metrics.input_tokens = metrics.input_tokens + (u.input_tokens or 0)
+      metrics.output_tokens = metrics.output_tokens + (u.output_tokens or 0)
+      metrics.cache_creation_tokens = metrics.cache_creation_tokens + (u.cache_creation_input_tokens or 0)
+      metrics.cache_read_tokens = metrics.cache_read_tokens + (u.cache_read_input_tokens or 0)
     end
   elseif msg.type == "user" then
     metrics.user_messages = metrics.user_messages + 1

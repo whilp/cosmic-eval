@@ -39,6 +39,11 @@ This outputs JSON with:
 - `tool_counts` - breakdown by tool name
 - `duration_seconds` - wall clock time
 - `escape_hatches` - suspicious patterns found in code
+- `api_calls` - number of API calls with token usage
+- `input_tokens` - total new input tokens
+- `output_tokens` - total output tokens generated
+- `cache_creation_tokens` - tokens written to cache
+- `cache_read_tokens` - tokens read from cache
 
 ### 3. Objective metrics to report
 
@@ -49,6 +54,10 @@ This outputs JSON with:
 | Duration (seconds) | timestamps | Total eval time |
 | Escape hatches | *.lua files | Missing cosmic.* wrappers |
 | Tools used | conversation.jsonl | Which capabilities needed |
+| Input tokens | message.usage | New tokens sent per request |
+| Output tokens | message.usage | Tokens generated |
+| Cache read tokens | message.usage | Tokens served from cache (efficiency) |
+| Cache creation tokens | message.usage | Tokens added to cache |
 
 **Escape hatch patterns to flag:**
 - `unix.` - raw unix module (should use cosmic.fs, cosmic.tty, etc.)
@@ -97,6 +106,10 @@ For each friction point, suggest a GitHub issue:
 | Tool calls | N |
 | Duration | Nm Ns |
 | Escape hatches | N |
+| Input tokens | N |
+| Output tokens | N |
+| Cache read tokens | N |
+| Cache creation tokens | N |
 
 ### Tool Usage
 | Tool | Count |
