@@ -68,14 +68,20 @@ This outputs JSON with:
 
 ### 4. Read all artifacts
 
-Read all files in the artifact directory:
+Read every file in the artifact directory:
 
-- **FRICTION.md** - Agent's self-reported friction
-- **output.txt** - Final output/summary from agent
-- **conversation.jsonl** - Full session log (parsed by grade.tl)
-- **\*.lua** - Implementation files (scanned for escape hatches)
-- **README.md** - Original scenario prompt
-- **\*.md** - Any other documentation created
+```bash
+# List all files
+ls -la /tmp/eval-artifacts/eval-scenario-*/
+
+# Read each file
+for f in /tmp/eval-artifacts/eval-scenario-*/*; do
+  echo "=== $f ==="
+  cat "$f"
+done
+```
+
+This includes whatever the agent produced: source files, tests, docs, databases, configs, etc.
 
 ### 5. Subjective analysis from FRICTION.md
 
