@@ -48,7 +48,10 @@ jobs:
         if: always()
         with:
           name: eval-${{ matrix.scenario }}
-          path: o/${{ matrix.scenario }}/
+          path: |
+            o/${{ matrix.scenario }}/
+            !o/${{ matrix.scenario }}/lua
+            !o/${{ matrix.scenario }}/cosmic-lua
           retention-days: 30
 
   summary:
