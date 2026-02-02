@@ -13,9 +13,9 @@ o := o
 # Dependencies
 deps := cosmic claude
 
-cosmic_version := 2026-02-01-51d09b1
+cosmic_version := 2026-02-02-a36771f
 cosmic_url := https://github.com/whilp/cosmic/releases/download/$(cosmic_version)/cosmic-lua
-cosmic_sha := 36b0633d20e5cffe03c1862a2301fed553c6c180b1a2adbd264bcf4ca2d4b0e8
+cosmic_sha := a1fc4d47e80bd61173a09c3c4aef3dc10339588f6e2ab39e75a9cab9d2fae7d7
 cosmic_bin := cosmic-lua
 
 claude_version := 2.1.29
