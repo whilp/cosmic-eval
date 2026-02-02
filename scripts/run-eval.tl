@@ -3,7 +3,7 @@
 
 local io = require("cosmic.io")
 local path = require("cosmo.path")
-local spawn = require("cosmic.spawn")
+local child = require("cosmic.child")
 local fs = require("cosmic.fs")
 local unix = require("cosmo.unix")
 
@@ -36,59 +36,82 @@ local tmpdir = os.getenv("TMPDIR") or "/tmp"
 local work_dir = unix.mkdtemp(path.join(tmpdir, "cosmic-eval-XXXXXX"))
 
 -- Copy scenario files to work directory
-for entry in fs.opendir(scenario_dir):iter() do
-  if entry.name ~= "." and entry.name ~= ".." then
-    local src = path.join(scenario_dir, entry.name)
-    local dst = path.join(work_dir, entry.name)
+local dir = fs.opendir(scenario_dir)
+while true do
+  local name = dir:read()
+  if not name then break end
+  if name ~= "." and name ~= ".." then
+    local src = path.join(scenario_dir, name)
+    local dst = path.join(work_dir, name)
     local content = io.slurp(src)
     if content then
       io.barf(dst, content)
     end
   end
 end
+dir:close()
 
 print("Running: " .. scenario)
 print("Work dir: " .. work_dir)
 print("")
 
 -- Run claude -p with the prompt
-local result = spawn.run({
+local env = {
+  "PATH=" .. (os.getenv("PATH") or ""),
+  "HOME=" .. (os.getenv("HOME") or ""),
+  "CLAUDE_CODE_OAUTH_TOKEN=" .. (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or ""),
+}
+
+local handle, spawn_err = child.spawn({
   claude_bin,
   "-p", prompt,
   "--output-format", "text",
 }, {
   cwd = work_dir,
-  env = {
-    PATH = os.getenv("PATH"),
-    HOME = os.getenv("HOME"),
-    CLAUDE_CODE_OAUTH_TOKEN = os.getenv("CLAUDE_CODE_OAUTH_TOKEN"),
-  },
+  env = env,
 })
 
+if not handle then
+  print("Error spawning claude: " .. (spawn_err or "unknown"))
+  os.exit(1)
+end
+
+-- Read stderr before calling read() which closes it
+local stderr_content = handle.stderr:read() or ""
+
+-- Read stdout and wait for exit
+local ok, stdout_content, exit_code = handle:read()
+stdout_content = stdout_content or ""
+exit_code = exit_code or 1
+
 -- Save results
-io.barf(path.join(results_dir, "output.txt"), result.stdout or "")
-io.barf(path.join(results_dir, "stderr.txt"), result.stderr or "")
-io.barf(path.join(results_dir, "exit_code.txt"), tostring(result.code))
+io.barf(path.join(results_dir, "output.txt"), stdout_content)
+io.barf(path.join(results_dir, "stderr.txt"), stderr_content)
+io.barf(path.join(results_dir, "exit_code.txt"), tostring(exit_code))
 
 -- Copy work directory contents to results
-for entry in fs.opendir(work_dir):iter() do
-  if entry.name ~= "." and entry.name ~= ".." then
-    local src = path.join(work_dir, entry.name)
-    local dst = path.join(results_dir, entry.name)
+local work_dir_handle = fs.opendir(work_dir)
+while true do
+  local name = work_dir_handle:read()
+  if not name then break end
+  if name ~= "." and name ~= ".." then
+    local src = path.join(work_dir, name)
+    local dst = path.join(results_dir, name)
     local content = io.slurp(src)
     if content then
       io.barf(dst, content)
     end
   end
 end
+work_dir_handle:close()
 
 -- Print output
-print("Exit code: " .. tostring(result.code))
+print("Exit code: " .. tostring(exit_code))
 print("")
-if result.stdout and #result.stdout > 0 then
+if #stdout_content > 0 then
   print("Output (last 50 lines):")
   local lines = {}
-  for line in result.stdout:gmatch("[^\n]+") do
+  for line in stdout_content:gmatch("[^\n]+") do
     table.insert(lines, line)
   end
   local start = math.max(1, #lines - 49)
@@ -97,10 +120,10 @@ if result.stdout and #result.stdout > 0 then
   end
 end
 
-if result.stderr and #result.stderr > 0 then
+if #stderr_content > 0 then
   print("")
   print("Stderr:")
-  print(result.stderr)
+  print(stderr_content)
 end
 
 -- Copy conversation JSONL if available
@@ -109,9 +132,11 @@ local encoded_path = work_dir:gsub("/", "-")
 local claude_projects = path.join(home, ".claude", "projects", encoded_path)
 local ok, conv_dir = pcall(fs.opendir, claude_projects)
 if ok then
-  for entry in conv_dir:iter() do
-    if entry.name:match("%.jsonl$") then
-      local src = path.join(claude_projects, entry.name)
+  while true do
+    local name = conv_dir:read()
+    if not name then break end
+    if name:match("%.jsonl$") then
+      local src = path.join(claude_projects, name)
       local dst = path.join(results_dir, "conversation.jsonl")
       local content = io.slurp(src)
       if content then
@@ -119,6 +144,7 @@ if ok then
       end
     end
   end
+  conv_dir:close()
 end
 
 -- Clean up work directory
@@ -127,4 +153,4 @@ unix.rmrf(work_dir)
 print("")
 print("Results saved to: " .. results_dir)
 
-os.exit(result.code)
+os.exit(exit_code as integer)
