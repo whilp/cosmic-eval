@@ -14,8 +14,12 @@ if not scenario then
   os.exit(1)
 end
 
--- Claude binary from env or default
+-- Claude binary from env or default (convert to absolute path)
 local claude_bin = os.getenv("CLAUDE") or "o/claude"
+if not claude_bin:match("^/") then
+  local cwd = fs.getcwd()
+  claude_bin = path.join(cwd, claude_bin)
+end
 
 local scenario_dir = scenario
 local readme_path = path.join(scenario_dir, "README.md")
