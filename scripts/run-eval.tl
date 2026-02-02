@@ -33,6 +33,24 @@ if not prompt then
   os.exit(1)
 end
 
+-- Append FRICTION.md instructions
+prompt = prompt .. [[
+
+---
+
+## Required: FRICTION.md
+
+After completing (or attempting) the task above, create a file called `FRICTION.md` documenting your experience. Include:
+
+1. **Blockers**: Anything that prevented progress (missing tools, permissions, unclear requirements)
+2. **Slowdowns**: Things that slowed you down (confusing APIs, missing docs, ambiguous specs)
+3. **Workarounds**: Hacks or compromises you had to make
+4. **Tool issues**: Problems with tools, libraries, or the environment
+5. **What went well**: Things that worked smoothly
+
+Be specific and honest. This feedback helps improve the evaluation scenarios and development tools.
+]]
+
 -- Create results directory
 local results_dir = path.join("o", scenario)
 fs.makedirs(results_dir)
