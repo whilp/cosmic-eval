@@ -72,6 +72,7 @@ local handle, spawn_err = child.spawn({
 }, {
   cwd = work_dir,
   env = env,
+  stderr = 2,  -- pass stderr through to terminal
 })
 
 if not handle then
@@ -79,10 +80,19 @@ if not handle then
   os.exit(1)
 end
 
--- Read output and wait for exit
-local _, stdout_content, exit_code = handle:read()
-stdout_content = stdout_content or ""
-exit_code = exit_code or 1
+-- Read stdout in chunks, printing as we go (for GH Actions logs)
+local stdout_chunks: {string} = {}
+while true do
+  local chunk = handle.stdout:read(4096)
+  if not chunk or #chunk == 0 then break end
+  io.write(chunk)
+  io.flush()
+  table.insert(stdout_chunks, chunk)
+end
+local stdout_content = table.concat(stdout_chunks)
+
+-- Wait for exit
+local exit_code = handle:wait()
 
 -- Save results
 cio.barf(path.join(results_dir, "output.txt"), stdout_content)
@@ -104,20 +114,8 @@ while true do
 end
 work_dir_handle:close()
 
--- Print output
-print("Exit code: " .. tostring(exit_code))
 print("")
-if #stdout_content > 0 then
-  print("Output (last 50 lines):")
-  local lines: {string} = {}
-  for line in stdout_content:gmatch("[^\n]+") do
-    table.insert(lines, line)
-  end
-  local start = math.max(1, #lines - 49)
-  for i = start, #lines do
-    print(lines[i])
-  end
-end
+print("Exit code: " .. tostring(exit_code))
 
 -- Copy conversation JSONL if available
 local home = os.getenv("HOME") or ""
