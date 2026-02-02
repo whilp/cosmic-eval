@@ -1,7 +1,7 @@
 #!/usr/bin/env cosmic-lua
 --- Summarize eval results from .got files or downloaded artifacts.
 
-local io = require("cosmic.io")
+local cio = require("cosmic.io")
 local fs = require("cosmic.fs")
 local path = require("cosmo.path")
 
@@ -15,8 +15,8 @@ local passed = 0
 local failed = 0
 local results: {Result} = {}
 
-local function add_result(name, got_file)
-  local content, err = io.slurp(got_file)
+local function add_result(name: string, got_file: string)
+  local content, err = cio.slurp(got_file)
   if not content then
     print("Error reading " .. got_file .. ": " .. (err or "unknown"))
     os.exit(1)
@@ -42,8 +42,8 @@ for i = 1, #arg do
 end
 
 -- Also check for downloaded artifacts in o/ (from CI)
-local ok, dir = pcall(fs.opendir, "o")
-if ok then
+local success, dir = pcall(fs.opendir, "o")
+if success then
   while true do
     local name = dir:read()
     if not name then break end
@@ -52,7 +52,7 @@ if ok then
       local st = fs.stat(subpath)
       if st and fs.is_dir(st:mode()) then
         local exit_file = path.join(subpath, "exit_code.txt")
-        local content = io.slurp(exit_file)
+        local content = cio.slurp(exit_file)
         if content then
           add_result(name, exit_file)
         end

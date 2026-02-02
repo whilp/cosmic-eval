@@ -5,7 +5,7 @@ local fs = require("cosmic.fs")
 local json = require("cosmic.json")
 
 local only = arg[1]
-local scenarios = {}
+local scenarios: {string} = {}
 
 local dir = fs.opendir(".")
 while true do
