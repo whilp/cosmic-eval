@@ -69,6 +69,7 @@ local handle, spawn_err = child.spawn({
   claude_bin,
   "-p", prompt,
   "--output-format", "text",
+  "--dangerously-skip-permissions",
 }, {
   cwd = work_dir,
   env = env,
