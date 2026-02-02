@@ -7,14 +7,21 @@ local json = require("cosmic.json")
 local only = arg[1]
 local scenarios = {}
 
-for entry in fs.opendir("."):iter() do
-  if entry.name:match("^scenario%-") and entry.type == "directory" then
-    if not only or entry.name:find(only, 1, true) then
-      table.insert(scenarios, entry.name)
+local dir = fs.opendir(".")
+while true do
+  local name = dir:read()
+  if not name then break end
+  if name:match("^scenario%-") then
+    local st = fs.stat(name)
+    if st and fs.is_dir(st:mode()) then
+      if not only or name:find(only, 1, true) then
+        table.insert(scenarios, name)
+      end
     end
   end
 end
+dir:close()
 
 table.sort(scenarios)
 io.write("scenarios=")
-print(json.encode(scenarios))
+print((json.encode(scenarios)))
