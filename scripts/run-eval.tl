@@ -20,6 +20,9 @@ if not claude_bin:match("^/") then
   claude_bin = path.join(cwd, claude_bin)
 end
 
+-- Model to use (default to sonnet)
+local model = os.getenv("CLAUDE_MODEL") or "sonnet"
+
 local scenario_dir = scenario
 local readme_path = path.join(scenario_dir, "README.md")
 
@@ -55,6 +58,7 @@ end
 dir:close()
 
 print("Running: " .. scenario)
+print("Model: " .. model)
 print("Work dir: " .. work_dir)
 print("")
 
@@ -70,6 +74,7 @@ local handle, spawn_err = child.spawn({
   "-p", prompt,
   "--output-format", "text",
   "--dangerously-skip-permissions",
+  "--model", model,
 }, {
   cwd = work_dir,
   env = env,

@@ -9,6 +9,11 @@ on:
         description: 'Run specific scenario (leave empty for all)'
         required: false
         type: string
+      model:
+        description: 'Claude model to use'
+        required: false
+        default: 'sonnet'
+        type: string
 
 jobs:
   list-scenarios:
@@ -35,6 +40,7 @@ jobs:
       - name: Run eval
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_MODEL: ${{ inputs.model || 'sonnet' }}
         run: make eval only=${{ matrix.scenario }}
 
       - name: Upload results
