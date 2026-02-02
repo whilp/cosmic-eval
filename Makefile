@@ -10,16 +10,24 @@ MAKEFLAGS += --no-builtin-variables
 
 o := o
 
-COSMIC_VERSION := 2026-02-01-51d09b1
-COSMIC_URL := https://github.com/whilp/cosmic/releases/download/$(COSMIC_VERSION)/cosmic-lua
-COSMIC_SHA := 36b0633d20e5cffe03c1862a2301fed553c6c180b1a2adbd264bcf4ca2d4b0e8
-COSMIC := $(o)/cosmic-lua
+# Dependencies
+deps := cosmic claude
 
-CLAUDE_VERSION := 2.1.29
-CLAUDE_BUCKET := https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases
-CLAUDE_PLATFORM := linux-x64
-CLAUDE_SHA := 4363a3acd8c39c645a7460ffba139d062ca38ddf40362508ea0be20159c4398c
-CLAUDE := $(o)/claude
+cosmic_version := 2026-02-01-51d09b1
+cosmic_url := https://github.com/whilp/cosmic/releases/download/$(cosmic_version)/cosmic-lua
+cosmic_sha := 36b0633d20e5cffe03c1862a2301fed553c6c180b1a2adbd264bcf4ca2d4b0e8
+cosmic_bin := cosmic-lua
+
+claude_version := 2.1.29
+claude_url := https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/$(claude_version)/linux-x64/claude
+claude_sha := 4363a3acd8c39c645a7460ffba139d062ca38ddf40362508ea0be20159c4398c
+claude_bin := claude
+
+# Define paths for each dep
+$(foreach d,$(deps),$(eval $(d)_path := $(o)/$($(d)_bin)))
+
+COSMIC := $(cosmic_path)
+CLAUDE := $(claude_path)
 
 scenarios := $(wildcard scenario-*)
 only ?=
@@ -52,17 +60,16 @@ $(o)/eval-summary.txt: $(results) $(COSMIC) | $(o)/.
 
 $(o)/%.got: % $(COSMIC) $(CLAUDE) | $$(@D)/.
 	@echo "Running: $<"
-	-@$(COSMIC) scripts/run-eval.tl $< > $(basename $@).out 2> $(basename $@).err; echo $$? > $@
+	-@CLAUDE=$(CLAUDE) $(COSMIC) scripts/run-eval.tl $< > $(basename $@).out 2> $(basename $@).err; echo $$? > $@
 
-$(COSMIC): | $(o)/.
-	curl -fsSL -o $@ $(COSMIC_URL)
-	@echo "$(COSMIC_SHA)  $@" | sha256sum -c -
-	chmod +x $@
-
-$(CLAUDE): | $(o)/.
-	curl -fsSL -o $@ $(CLAUDE_BUCKET)/$(CLAUDE_VERSION)/$(CLAUDE_PLATFORM)/claude
-	@echo "$(CLAUDE_SHA)  $@" | sha256sum -c -
-	chmod +x $@
+# Generate download rules for each dep
+define dep_rule
+$($(1)_path): | $(o)/.
+	curl -fsSL -o $$@ $($(1)_url)
+	@echo "$($(1)_sha)  $$@" | sha256sum -c -
+	chmod +x $$@
+endef
+$(foreach d,$(deps),$(eval $(call dep_rule,$(d))))
 
 %/.:
 	@mkdir -p $@

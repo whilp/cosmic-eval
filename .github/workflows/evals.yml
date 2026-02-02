@@ -18,9 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - id: list
-        run: |
-          scenarios=$(make list-scenarios only="${{ inputs.only }}")
-          echo "scenarios=$scenarios" >> "$GITHUB_OUTPUT"
+        run: make list-scenarios only="${{ inputs.only }}" >> "$GITHUB_OUTPUT"
 
   eval:
     needs: list-scenarios
@@ -62,12 +60,4 @@ jobs:
           merge-multiple: true
 
       - name: Summarize results
-        run: |
-          # Move results to expected location and summarize
-          for dir in o/eval-*/; do
-            scenario=$(basename "$dir" | sed 's/eval-//')
-            if [[ -f "$dir/exit_code.txt" ]]; then
-              cp "$dir/exit_code.txt" "o/${scenario}.got"
-            fi
-          done
-          make summary >> $GITHUB_STEP_SUMMARY
+        run: make summary >> $GITHUB_STEP_SUMMARY

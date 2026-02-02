@@ -14,8 +14,8 @@ if not scenario then
   os.exit(1)
 end
 
--- Claude binary installed by Makefile
-local claude_bin = "o/claude"
+-- Claude binary from env or default
+local claude_bin = os.getenv("CLAUDE") or "o/claude"
 
 local scenario_dir = scenario
 local readme_path = path.join(scenario_dir, "README.md")
@@ -32,9 +32,8 @@ local results_dir = path.join("o", scenario)
 unix.makedirs(results_dir, tonumber("755", 8))
 
 -- Create a temporary working directory
-local work_dir = os.getenv("TMPDIR") or "/tmp"
-work_dir = path.join(work_dir, "cosmic-eval-" .. scenario .. "-" .. tostring(os.time()))
-unix.makedirs(work_dir, tonumber("755", 8))
+local tmpdir = os.getenv("TMPDIR") or "/tmp"
+local work_dir = unix.mkdtemp(path.join(tmpdir, "cosmic-eval-XXXXXX"))
 
 -- Copy scenario files to work directory
 for entry in fs.opendir(scenario_dir):iter() do
@@ -102,6 +101,24 @@ if result.stderr and #result.stderr > 0 then
   print("")
   print("Stderr:")
   print(result.stderr)
+end
+
+-- Copy conversation JSONL if available
+local home = os.getenv("HOME") or ""
+local encoded_path = work_dir:gsub("/", "-")
+local claude_projects = path.join(home, ".claude", "projects", encoded_path)
+local ok, conv_dir = pcall(fs.opendir, claude_projects)
+if ok then
+  for entry in conv_dir:iter() do
+    if entry.name:match("%.jsonl$") then
+      local src = path.join(claude_projects, entry.name)
+      local dst = path.join(results_dir, "conversation.jsonl")
+      local content = io.slurp(src)
+      if content then
+        io.barf(dst, content)
+      end
+    end
+  end
 end
 
 -- Clean up work directory

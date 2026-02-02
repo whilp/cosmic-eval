@@ -16,4 +16,5 @@ for entry in fs.opendir("."):iter() do
 end
 
 table.sort(scenarios)
+io.write("scenarios=")
 print(json.encode(scenarios))
