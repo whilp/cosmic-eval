@@ -9,7 +9,8 @@ Build a command-line tool that fetches current weather data from a public API an
 ### Core Functionality
 
 1. **HTTP API Client**
-   - Fetch weather data from OpenWeatherMap API (or similar free weather API)
+   - Fetch weather data from wttr.in (free weather API, no API key required)
+   - Use the JSON format endpoint: `https://wttr.in/{city}?format=j1`
    - Handle HTTP errors gracefully (network failures, rate limits, invalid responses)
    - Parse JSON responses
 
@@ -68,6 +69,7 @@ Your implementation should demonstrate:
 
 ## Notes
 
-- You'll need to sign up for a free API key from a weather service (OpenWeatherMap, WeatherAPI, etc.)
-- The API key should be configurable (environment variable or command-line argument)
+- wttr.in is a free service that requires no API key or signup
+- The API returns JSON data including current conditions, temperature, humidity, and more
+- Example API response structure: `curl "https://wttr.in/London?format=j1"`
 - Focus on correctness and robustness rather than feature completeness
