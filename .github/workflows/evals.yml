@@ -23,7 +23,7 @@ jobs:
   eval:
     needs: list-scenarios
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
