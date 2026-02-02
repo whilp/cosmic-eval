@@ -5,7 +5,6 @@ local cio = require("cosmic.io")
 local path = require("cosmo.path")
 local child = require("cosmic.child")
 local fs = require("cosmic.fs")
-local unix = require("cosmo.unix")
 
 local scenario = arg[1]
 if not scenario then
@@ -73,6 +72,7 @@ local handle, spawn_err = child.spawn({
 }, {
   cwd = work_dir,
   env = env,
+  stderr = 2,  -- pass stderr through to terminal for real-time visibility
 })
 
 if not handle then
@@ -80,48 +80,15 @@ if not handle then
   os.exit(1)
 end
 
--- Read stdout and stderr, streaming both to terminal while capturing
-local stdout_chunks: {string} = {}
-local stderr_chunks: {string} = {}
-local stdout_done = false
-local stderr_done = false
+-- Read stdout and wait for completion
+local _, stdout_content, exit_code = handle:read()
+stdout_content = stdout_content or ""
+exit_code = exit_code or 1
+local stderr_content = ""  -- stderr goes to terminal, not captured
 
-while not (stdout_done and stderr_done) do
-  local fds: any = {}
-  if not stdout_done then table.insert(fds, {fd = handle.stdout.fd, events = 1}) end
-  if not stderr_done then table.insert(fds, {fd = handle.stderr.fd, events = 1}) end
-
-  local ready: integer = unix.poll(fds, 30000) as integer
-  if ready == 0 then break end
-
-  if not stdout_done then
-    local chunk = handle.stdout:read(4096)
-    if not chunk or #chunk == 0 then
-      stdout_done = true
-    else
-      io.write(chunk)
-      io.flush()
-      table.insert(stdout_chunks, chunk)
-    end
-  end
-
-  if not stderr_done then
-    local chunk = handle.stderr:read(4096)
-    if not chunk or #chunk == 0 then
-      stderr_done = true
-    else
-      io.stderr:write(chunk)
-      io.stderr:flush()
-      table.insert(stderr_chunks, chunk)
-    end
-  end
-end
-
-local stdout_content = table.concat(stdout_chunks)
-local stderr_content = table.concat(stderr_chunks)
-
--- Wait for exit
-local exit_code = handle:wait()
+-- Echo stdout for visibility
+io.write(stdout_content)
+io.flush()
 
 -- Save results
 cio.barf(path.join(results_dir, "output.txt"), stdout_content)
