@@ -66,7 +66,7 @@ $(o)/%.got: % $(COSMIC) $(CLAUDE) | $$(@D)/.
 define dep_rule
 $($(1)_path): | $(o)/.
 	@curl -fsSL -o $$@ $($(1)_url)
-	@echo "$($(1)_sha)  $$@" | sha256sum -c -
+	@echo "$($(1)_sha)  $$@" | sha256sum -c - >/dev/null
 	@chmod +x $$@
 endef
 $(foreach d,$(deps),$(eval $(call dep_rule,$(d))))
