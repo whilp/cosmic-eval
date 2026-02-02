@@ -23,18 +23,35 @@ end
 -- Model to use (default to sonnet)
 local model = os.getenv("CLAUDE_MODEL") or "sonnet"
 
+-- cosmic-lua URL from Makefile
+local cosmic_url = os.getenv("COSMIC_URL")
+if not cosmic_url then
+  print("Error: COSMIC_URL not set")
+  os.exit(1)
+end
+
 local scenario_dir = scenario
 local readme_path = path.join(scenario_dir, "README.md")
 
 -- Read the scenario prompt
-local prompt, err = cio.slurp(readme_path)
-if not prompt then
+local scenario_content, err = cio.slurp(readme_path)
+if not scenario_content then
   print("Error reading " .. readme_path .. ": " .. (err or "unknown error"))
   os.exit(1)
 end
 
--- Append FRICTION.md instructions
-prompt = prompt .. [[
+-- Build full prompt with cosmic-lua requirement
+local prompt = [[
+## Required: Use cosmic-lua
+
+You MUST use cosmic-lua for this task. Do not use Python, Node.js, or other runtimes.
+
+Download: ]] .. cosmic_url .. [[
+
+
+---
+
+]] .. scenario_content .. [[
 
 ---
 

@@ -60,7 +60,7 @@ $(o)/eval-summary.txt: $(results) $(COSMIC) | $(o)/.
 
 $(o)/%.got: % $(COSMIC) $(CLAUDE) | $$(@D)/.
 	@echo "Running: $<"
-	-@CLAUDE=$(CLAUDE) $(COSMIC) scripts/run-eval.tl $< > $(basename $@).out 2> $(basename $@).err; echo $$? > $@
+	-@CLAUDE=$(CLAUDE) COSMIC_URL=$(cosmic_url) $(COSMIC) scripts/run-eval.tl $< > $(basename $@).out 2> $(basename $@).err; echo $$? > $@
 
 # Generate download rules for each dep
 define dep_rule
