@@ -14,40 +14,52 @@ Analyze FRICTION.md and implementation files from cosmic-eval runs to identify:
 
 ## Grading process
 
-### 1. Find and read artifacts
+### 1. Download artifacts
 
 ```bash
 # If given a run ID
 gh run download <run-id> --repo whilp/cosmic-eval -D /tmp/eval-artifacts
 
-# Find friction logs
-find /tmp/eval-artifacts -name "FRICTION.md"
+# Find the scenario directory
+ls /tmp/eval-artifacts/
 ```
 
-### 2. Check for escape hatches
+### 2. Run the grading script
 
-Scan all .lua files for suspicious patterns that indicate missing cosmic.* wrappers:
+Use `grade.tl` to compute objective metrics:
 
-**Red flags (should have cosmic.* wrapper):**
-- `unix.` - raw unix module usage (chmod, stat, etc.)
-- `os.execute()` - shelling out for functionality
-- `io.popen()` - shelling out to read output
-- `os.getenv()` - should use cosmic wrapper if one exists
-
-**Grep for these:**
 ```bash
-grep -n "unix\.\|os\.execute\|io\.popen" *.lua
+cd /tmp/eval-artifacts/eval-scenario-*/
+lua /path/to/skills/grade-friction/grade.tl conversation.jsonl *.lua
 ```
 
-### 3. Check for API confusion
+This outputs JSON with:
+- `assistant_turns` - number of API round-trips
+- `tool_calls` - total tool invocations
+- `tool_counts` - breakdown by tool name
+- `duration_seconds` - wall clock time
+- `escape_hatches` - suspicious patterns found in code
 
-Look for patterns indicating the agent got confused:
+### 3. Objective metrics to report
 
-- Used `cosmo.*` when `cosmic.*` wrapper exists
-- Used lsqlite3 methods (`bind_values`, `step`) instead of cosmic.sqlite (`query`, `exec`)
-- Used raw require patterns instead of cosmic modules
+| Metric | Source | What it indicates |
+|--------|--------|-------------------|
+| Assistant turns | conversation.jsonl | Complexity / back-and-forth |
+| Tool calls | conversation.jsonl | Amount of work done |
+| Duration (seconds) | timestamps | Total eval time |
+| Escape hatches | *.lua files | Missing cosmic.* wrappers |
+| Tools used | conversation.jsonl | Which capabilities needed |
 
-### 4. Analyze FRICTION.md sections
+**Escape hatch patterns to flag:**
+- `unix.` - raw unix module (should use cosmic.fs, cosmic.tty, etc.)
+- `os.execute()` - shelling out (missing built-in API)
+- `io.popen()` - shelling out to read output
+- `lsqlite3` - raw SQLite (should use cosmic.sqlite)
+- `cosmo.` - low-level API (should use cosmic.* wrapper if available)
+
+### 4. Subjective analysis from FRICTION.md
+
+Read FRICTION.md and extract:
 
 **Slowdowns**: Note time impact and root cause
 - API discovery issues → docs improvement needed
@@ -58,19 +70,18 @@ Look for patterns indicating the agent got confused:
 - What was the workaround?
 - What cosmic.* API would eliminate it?
 
-**Tool Issues**: Direct bugs or limitations
+**What Went Well**: Positive signal about cosmic-lua
 
 ### 5. Generate issue suggestions
 
 For each friction point, suggest a GitHub issue:
 
 ```markdown
-## Suggested Issues
-
-### 1. [Title]
+### [Title]
 **Repo**: whilp/cosmic
 **Evidence**: [quote from FRICTION.md or code snippet]
 **Suggestion**: [what to add/fix]
+**Artifact**: [link to GitHub Actions artifact]
 ```
 
 ## Output format
@@ -78,46 +89,70 @@ For each friction point, suggest a GitHub issue:
 ```markdown
 # Friction Analysis: [scenario-name]
 
-## Summary
-- **Overall rating**: X/10
-- **Escape hatches found**: N
-- **Workarounds needed**: N
-- **Time lost to friction**: ~X minutes
+## Objective Metrics
 
-## Escape Hatches
+| Metric | Value |
+|--------|-------|
+| Assistant turns | N |
+| Tool calls | N |
+| Duration | Nm Ns |
+| Escape hatches | N |
 
-| File | Line | Pattern | Suggested cosmic.* API |
-|------|------|---------|------------------------|
+### Tool Usage
+| Tool | Count |
+|------|-------|
+| Bash | N |
+| Write | N |
+| ... | ... |
+
+### Escape Hatches Found
+
+| File | Line | Pattern | Suggested API |
+|------|------|---------|---------------|
+| vault.lua | 83 | unix.chmod | cosmic.fs.chmod |
 | ... | ... | ... | ... |
 
-## API Confusion
-- [description of confusion and resolution]
+## Subjective Analysis
 
-## Workarounds
+### Slowdowns
+- [description] (~N minutes)
+
+### Workarounds
 1. **[workaround]**: [why needed, what would fix it]
 
-## Suggested Issues
-1. [issue title] - [brief description]
-2. ...
+### What Went Well
+- [positive observations]
 
-## What Went Well
-- [positive observations about cosmic-lua]
+## Suggested Issues
+
+1. **[Title]** - [brief description]
+   - Evidence: [quote]
+   - Artifact: [link]
+
+## Overall Grade
+
+- **Friction Level**: N/10 (lower is better)
+- **cosmic-lua Rating**: N/10 (from FRICTION.md)
+- **Recommendation**: [file N issues on whilp/cosmic]
 ```
 
-## Example analysis
+## Example
 
-From scenario-02-password-vault:
+From scenario-02-password-vault (run #21576913305):
+
+**Objective:**
+- 98 assistant turns
+- 63 tool calls
+- ~7 minutes duration
+- 3 escape hatches
 
 **Escape hatches:**
 - `unix.chmod()` → needs `cosmic.fs.chmod()`
 - `os.execute("stty")` → needs `cosmic.tty.read_password()`
 - `io.popen("stty -g")` → same as above
 
-**API confusion:**
-- Initially tried lsqlite3 `bind_values()`/`step()` before discovering `cosmic.sqlite` wrapper
-
-**Issues to file:**
-1. Add cosmic.tty.read_password()
-2. Add cosmic.fs.chmod()
-3. Clarify cosmic.sqlite vs lsqlite3 in docs
-4. Add cosmic.crypto.encrypt/decrypt
+**Issues filed:**
+- #190: cosmic.tty.read_password()
+- #191: cosmic.fs.chmod()
+- #192: Clarify cosmic.sqlite vs lsqlite3
+- #193: cosmic.crypto.encrypt/decrypt
