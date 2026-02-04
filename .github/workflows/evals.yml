@@ -37,11 +37,20 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Setup network sandbox
+        run: |
+          chmod +x scripts/setup-network-sandbox.sh scripts/cleanup-network-sandbox.sh
+          scripts/setup-network-sandbox.sh "${{ matrix.scenario }}"
+
       - name: Run eval
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_MODEL: ${{ inputs.model || 'sonnet' }}
         run: make eval only=${{ matrix.scenario }}
+
+      - name: Cleanup network sandbox
+        if: always()
+        run: scripts/cleanup-network-sandbox.sh
 
       - name: Upload results
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
