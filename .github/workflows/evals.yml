@@ -14,6 +14,11 @@ on:
         required: false
         default: 'sonnet'
         type: string
+      network_restricted:
+        description: 'Run with network restrictions (Docker + nftables)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   list-scenarios:
@@ -37,11 +42,171 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Run eval
+      - name: Download dependencies
+        run: |
+          mkdir -p o
+          # Download cosmic-lua
+          curl -fsSL -o o/cosmic-lua https://github.com/whilp/cosmic/releases/download/2026-02-02-a36771f/cosmic-lua
+          echo "a1fc4d47e80bd61173a09c3c4aef3dc10339588f6e2ab39e75a9cab9d2fae7d7  o/cosmic-lua" | sha256sum -c -
+          chmod +x o/cosmic-lua
+          # Download claude
+          curl -fsSL -o o/claude https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.29/linux-x64/claude
+          echo "4363a3acd8c39c645a7460ffba139d062ca38ddf40362508ea0be20159c4398c  o/claude" | sha256sum -c -
+          chmod +x o/claude
+
+      - name: Run eval (unrestricted)
+        if: ${{ inputs.network_restricted != true }}
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_MODEL: ${{ inputs.model || 'sonnet' }}
-        run: make eval only=${{ matrix.scenario }}
+        run: |
+          CLAUDE=o/claude COSMIC_URL=https://github.com/whilp/cosmic/releases/download/2026-02-02-a36771f/cosmic-lua \
+            o/cosmic-lua scripts/run-eval.tl ${{ matrix.scenario }}
+
+      - name: Setup network restrictions
+        if: ${{ inputs.network_restricted == true }}
+        run: |
+          # Install nftables if not present
+          sudo apt-get update && sudo apt-get install -y nftables
+
+          # Resolve allowed domains to IP addresses
+          resolve_domain() {
+            dig +short "$1" A | grep -E '^[0-9]+\.' | head -5
+          }
+
+          # Domains the eval needs access to:
+          # - api.anthropic.com: Claude API
+          # - wttr.in: Weather API (scenario-01)
+          # - example.com, www.example.com: Test domain (scenarios 3, 4)
+          # - httpbin.org: HTTP testing
+          ALLOWED_DOMAINS=(
+            "api.anthropic.com"
+            "wttr.in"
+            "example.com"
+            "www.example.com"
+            "httpbin.org"
+          )
+
+          # Collect all IPs
+          ALLOWED_IPS=""
+          for domain in "${ALLOWED_DOMAINS[@]}"; do
+            echo "Resolving $domain..."
+            for ip in $(resolve_domain "$domain"); do
+              echo "  -> $ip"
+              ALLOWED_IPS="$ALLOWED_IPS $ip"
+            done
+          done
+
+          # Create nftables ruleset
+          cat > /tmp/restrict.nft << 'EOF'
+          table inet eval_restrict {
+              set allowed_ips {
+                  type ipv4_addr
+                  flags interval
+              }
+
+              set container_ips {
+                  type ipv4_addr
+              }
+
+              chain forward {
+                  type filter hook forward priority 0; policy accept;
+
+                  # Only apply restrictions to tracked container IPs
+                  ip saddr @container_ips jump container_egress
+              }
+
+              chain container_egress {
+                  # Allow established connections
+                  ct state established,related accept
+
+                  # Allow DNS (UDP and TCP port 53)
+                  udp dport 53 accept
+                  tcp dport 53 accept
+
+                  # Allow HTTPS to allowed IPs
+                  ip daddr @allowed_ips tcp dport 443 accept
+
+                  # Allow HTTP to allowed IPs (some APIs use HTTP)
+                  ip daddr @allowed_ips tcp dport 80 accept
+
+                  # Drop everything else from containers
+                  drop
+              }
+          }
+          EOF
+
+          # Load the ruleset
+          sudo nft -f /tmp/restrict.nft
+
+          # Add resolved IPs to the allowed set
+          for ip in $ALLOWED_IPS; do
+            sudo nft add element inet eval_restrict allowed_ips { "$ip" } 2>/dev/null || true
+          done
+
+          # Also add some well-known CIDR ranges for reliability
+          # Anthropic/Claude infrastructure
+          sudo nft add element inet eval_restrict allowed_ips { 104.18.0.0/16 } 2>/dev/null || true
+          # Cloudflare (used by many APIs)
+          sudo nft add element inet eval_restrict allowed_ips { 104.16.0.0/12 } 2>/dev/null || true
+          sudo nft add element inet eval_restrict allowed_ips { 172.64.0.0/13 } 2>/dev/null || true
+          sudo nft add element inet eval_restrict allowed_ips { 162.158.0.0/15 } 2>/dev/null || true
+
+          echo "Network restrictions configured"
+          sudo nft list ruleset
+
+      - name: Run eval (network restricted)
+        if: ${{ inputs.network_restricted == true }}
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_MODEL: ${{ inputs.model || 'sonnet' }}
+        run: |
+          # Create a Docker container for the eval
+          CONTAINER_ID=$(docker run -d \
+            --name eval-container \
+            -v "$PWD:/workspace:rw" \
+            -w /workspace \
+            -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
+            -e CLAUDE_MODEL="$CLAUDE_MODEL" \
+            -e HOME=/root \
+            ubuntu:22.04 \
+            sleep infinity)
+
+          # Get container IP
+          CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $CONTAINER_ID)
+          echo "Container IP: $CONTAINER_IP"
+
+          # Add container IP to restricted set
+          sudo nft add element inet eval_restrict container_ips { "$CONTAINER_IP" }
+
+          # Install minimal dependencies in container
+          docker exec eval-container bash -c '
+            apt-get update -qq && apt-get install -y -qq ca-certificates curl > /dev/null 2>&1
+          '
+
+          # Run the eval inside the container
+          docker exec eval-container bash -c '
+            export PATH="/workspace/o:$PATH"
+            export CLAUDE_CODE_OAUTH_TOKEN="'"$CLAUDE_CODE_OAUTH_TOKEN"'"
+            export CLAUDE_MODEL="'"$CLAUDE_MODEL"'"
+            CLAUDE=/workspace/o/claude COSMIC_URL=https://github.com/whilp/cosmic/releases/download/2026-02-02-a36771f/cosmic-lua \
+              /workspace/o/cosmic-lua /workspace/scripts/run-eval.tl ${{ matrix.scenario }}
+          ' || true
+
+          # Copy results from container if they were written to a different location
+          docker cp eval-container:/workspace/o/${{ matrix.scenario }} o/${{ matrix.scenario }} 2>/dev/null || true
+
+          # Cleanup container
+          docker stop eval-container
+          docker rm eval-container
+
+          # Remove container IP from restricted set
+          sudo nft delete element inet eval_restrict container_ips { "$CONTAINER_IP" } 2>/dev/null || true
+
+      - name: Cleanup network restrictions
+        if: ${{ always() && inputs.network_restricted == true }}
+        run: |
+          sudo nft delete table inet eval_restrict 2>/dev/null || true
 
       - name: Upload results
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
