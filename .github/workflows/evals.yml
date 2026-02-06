@@ -15,11 +15,6 @@ on:
         required: false
         default: 'sonnet'
         type: string
-      network_restricted:
-        description: 'Run with network restrictions (Docker + Smokescreen proxy)'
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   list-scenarios:
@@ -61,17 +56,7 @@ jobs:
           echo "4363a3acd8c39c645a7460ffba139d062ca38ddf40362508ea0be20159c4398c  o/claude" | sha256sum -c -
           chmod +x o/claude
 
-      - name: Run eval (unrestricted)
-        if: ${{ inputs.network_restricted != true }}
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          CLAUDE_MODEL: ${{ inputs.model || 'sonnet' }}
-        run: |
-          CLAUDE=o/claude COSMIC_URL=https://github.com/whilp/cosmic/releases/download/2026-02-02-a36771f/cosmic-lua \
-            o/cosmic-lua scripts/run-eval.tl ${{ matrix.scenario }}
-
       - name: Setup Smokescreen proxy
-        if: ${{ inputs.network_restricted == true }}
         run: |
           # Create Smokescreen ACL config
           mkdir -p /tmp/smokescreen
@@ -146,8 +131,7 @@ jobs:
           echo "PROXY_IP=$PROXY_IP" >> $GITHUB_ENV
           echo "Smokescreen proxy running at $PROXY_IP:4750"
 
-      - name: Run eval (network restricted)
-        if: ${{ inputs.network_restricted == true }}
+      - name: Run eval
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_MODEL: ${{ inputs.model || 'sonnet' }}
@@ -176,6 +160,11 @@ jobs:
           CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' eval-container)
           echo "Eval container IP: $CONTAINER_IP"
 
+          # Install minimal dependencies in container before network restrictions
+          docker exec eval-container bash -c '
+            apt-get update -qq && apt-get install -y -qq ca-certificates curl > /dev/null 2>&1
+          '
+
           # Setup nftables to block all egress except to the proxy
           # This prevents bypassing the proxy with raw sockets
           sudo nft -f - << EOF
@@ -203,34 +192,6 @@ jobs:
           echo "nftables rules configured:"
           sudo nft list ruleset
 
-          # Install minimal dependencies in container (before restrictions take effect)
-          # Note: apt-get needs direct network access, so we do this before nftables
-          # Actually nftables is already active, so we need to temporarily allow it
-          # or install deps a different way. Let's mount the apt cache instead.
-
-          # Remove nftables temporarily for apt-get
-          sudo nft delete table inet eval_restrict
-
-          docker exec eval-container bash -c '
-            apt-get update -qq && apt-get install -y -qq ca-certificates curl > /dev/null 2>&1
-          '
-
-          # Re-add nftables rules
-          sudo nft -f - << EOF
-          table inet eval_restrict {
-              chain forward {
-                  type filter hook forward priority 0; policy accept;
-                  ip saddr $CONTAINER_IP jump eval_egress
-              }
-
-              chain eval_egress {
-                  ct state established,related accept
-                  ip daddr $PROXY_IP tcp dport 4750 accept
-                  log prefix "EVAL_BLOCKED: " drop
-              }
-          }
-          EOF
-
           echo "Network restrictions active. Running eval..."
 
           # Run the eval inside the container
@@ -256,7 +217,7 @@ jobs:
           sudo dmesg | grep "EVAL_BLOCKED" | tail -20 || echo "No blocked attempts logged"
 
       - name: Cleanup containers and network rules
-        if: ${{ always() && inputs.network_restricted == true }}
+        if: always()
         run: |
           # Remove nftables rules
           sudo nft delete table inet eval_restrict 2>/dev/null || true
