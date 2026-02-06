@@ -29,7 +29,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: list
-        run: make list-scenarios only="${{ inputs.only }}" >> "$GITHUB_OUTPUT"
+        run: |
+          # On push, only run scenario-01 to keep CI fast
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo 'scenarios=["scenario-01-weather-cache"]' >> "$GITHUB_OUTPUT"
+          else
+            make list-scenarios only="${{ inputs.only }}" >> "$GITHUB_OUTPUT"
+          fi
 
   eval:
     needs: list-scenarios
