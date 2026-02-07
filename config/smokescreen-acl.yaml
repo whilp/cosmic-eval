@@ -1,0 +1,16 @@
+---
+version: v1
+services: []
+default:
+  name: default
+  project: cosmic-eval
+  action: enforce
+  allowed_domains:
+    - api.anthropic.com
+    - wttr.in
+    - example.com
+    - www.example.com
+    - httpbin.org
+    # TODO: limit to specific repos/paths once smokescreen supports path-based ACLs
+    - github.com
+    - objects.githubusercontent.com

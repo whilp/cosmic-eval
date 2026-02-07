@@ -1,0 +1,3 @@
+---
+allow_missing_role: true
+acl_file: /etc/smokescreen/acl.yaml

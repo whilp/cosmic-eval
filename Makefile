@@ -23,11 +23,15 @@ claude_url := https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad
 claude_sha := 4363a3acd8c39c645a7460ffba139d062ca38ddf40362508ea0be20159c4398c
 claude_bin := claude
 
+smokescreen_sha := eae81044dc8309bd7de5782be587cccffc1c4084
+smokescreen_url := https://github.com/stripe/smokescreen/archive/$(smokescreen_sha).tar.gz
+
 # Define paths for each dep
 $(foreach d,$(deps),$(eval $(d)_path := $(o)/$($(d)_bin)))
 
 COSMIC := $(cosmic_path)
 CLAUDE := $(claude_path)
+SMOKESCREEN := $(o)/smokescreen
 
 scenarios := $(wildcard scenario-*)
 only ?=
@@ -39,10 +43,21 @@ help:
 	@echo "usage: make <target>"
 	@echo ""
 	@echo "targets:"
-	@echo "  eval            run all evals"
-	@echo "  eval only=X     run evals matching X"
-	@echo "  list-scenarios  list scenarios as JSON"
-	@echo "  clean           remove build artifacts"
+	@echo "  eval               run all evals (local, unsandboxed)"
+	@echo "  eval-sandbox       run one eval in a network-restricted container"
+	@echo "  deps               download cosmic-lua and claude"
+	@echo "  list-scenarios     list scenarios as JSON"
+	@echo "  summary            summarize eval results"
+	@echo "  clean              remove build artifacts"
+	@echo ""
+	@echo "  only=X             filter to scenario matching X"
+
+.PHONY: deps
+deps: $(COSMIC) $(CLAUDE) $(SMOKESCREEN)
+
+.PHONY: eval-sandbox
+eval-sandbox: $(COSMIC) $(CLAUDE) $(SMOKESCREEN)
+	COSMIC_URL=$(cosmic_url) $(COSMIC) scripts/eval-sandbox.tl $(only)
 
 .PHONY: list-scenarios
 list-scenarios: $(COSMIC)
@@ -70,6 +85,11 @@ $($(1)_path): | $(o)/.
 	@chmod +x $$@
 endef
 $(foreach d,$(deps),$(eval $(call dep_rule,$(d))))
+
+$(SMOKESCREEN): | $(o)/.
+	@curl -fsSL $(smokescreen_url) | tar -xz -C $(o)
+	@cd $(o)/smokescreen-$(smokescreen_sha) && CGO_ENABLED=0 go build -o $(CURDIR)/$@ .
+	@rm -rf $(o)/smokescreen-$(smokescreen_sha)
 
 %/.:
 	@mkdir -p $@

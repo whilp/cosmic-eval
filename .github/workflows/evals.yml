@@ -22,10 +22,9 @@ jobs:
     outputs:
       scenarios: ${{ steps.list.outputs.scenarios }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - id: list
         run: |
-          # On push, only run scenario-01 to keep CI fast
           if [[ "${{ github.event_name }}" == "push" ]]; then
             echo 'scenarios=["scenario-01-weather-cache"]' >> "$GITHUB_OUTPUT"
           else
@@ -42,192 +41,16 @@ jobs:
         scenario: ${{ fromJson(needs.list-scenarios.outputs.scenarios) }}
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download dependencies
-        run: |
-          mkdir -p o
-          # Download cosmic-lua
-          curl -fsSL -o o/cosmic-lua https://github.com/whilp/cosmic/releases/download/2026-02-02-a36771f/cosmic-lua
-          echo "a1fc4d47e80bd61173a09c3c4aef3dc10339588f6e2ab39e75a9cab9d2fae7d7  o/cosmic-lua" | sha256sum -c -
-          chmod +x o/cosmic-lua
-          # Download claude
-          curl -fsSL -o o/claude https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.29/linux-x64/claude
-          echo "4363a3acd8c39c645a7460ffba139d062ca38ddf40362508ea0be20159c4398c  o/claude" | sha256sum -c -
-          chmod +x o/claude
-
-      - name: Setup Smokescreen proxy
-        run: |
-          # Create Smokescreen ACL config
-          mkdir -p /tmp/smokescreen
-          cat > /tmp/smokescreen/acl.yaml << 'EOF'
-          version: v1
-          services:
-            - name: eval-runner
-              project: cosmic-eval
-              action: enforce
-              allowed_domains:
-                # Claude API
-                - api.anthropic.com
-                # Weather API (scenario-01)
-                - wttr.in
-                # Test domains for web archiver/downloader scenarios
-                - example.com
-                - www.example.com
-                - httpbin.org
-                # GitHub (for cosmic-lua download URL in prompts)
-                - github.com
-                - objects.githubusercontent.com
-          default:
-            project: cosmic-eval
-            action: enforce
-            allowed_domains:
-              - api.anthropic.com
-              - wttr.in
-              - example.com
-              - www.example.com
-              - httpbin.org
-              - github.com
-              - objects.githubusercontent.com
-          EOF
-
-          # Build and run Smokescreen
-          cat > /tmp/smokescreen/Dockerfile << 'EOF'
-          FROM golang:1.21-alpine AS builder
-          RUN apk add --no-cache git
-          WORKDIR /build
-          RUN git clone --depth 1 https://github.com/stripe/smokescreen.git .
-          RUN go build -o smokescreen ./cmd/smokescreen
-
-          FROM alpine:3.19
-          RUN apk add --no-cache ca-certificates
-          COPY --from=builder /build/smokescreen /usr/local/bin/
-          ENTRYPOINT ["smokescreen"]
-          EOF
-
-          docker build -t smokescreen:local /tmp/smokescreen
-
-          # Create Docker network for proxy communication
-          docker network create eval-network
-
-          # Start Smokescreen proxy
-          docker run -d \
-            --name smokescreen \
-            --network eval-network \
-            -v /tmp/smokescreen/acl.yaml:/etc/smokescreen/acl.yaml:ro \
-            -p 4750:4750 \
-            smokescreen:local \
-            --listen-ip 0.0.0.0 \
-            --listen-port 4750 \
-            --egress-acl-file /etc/smokescreen/acl.yaml \
-            --timeout 60s
-
-          # Wait for proxy to be ready
-          sleep 2
-          docker logs smokescreen
-
-          # Get the host IP for the eval container to reach the proxy
-          PROXY_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' smokescreen)
-          echo "PROXY_IP=$PROXY_IP" >> $GITHUB_ENV
-          echo "Smokescreen proxy running at $PROXY_IP:4750"
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Run eval
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_MODEL: ${{ inputs.model || 'sonnet' }}
-        run: |
-          # Get Smokescreen container IP for nftables rules
-          PROXY_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' smokescreen)
-          echo "Smokescreen proxy IP: $PROXY_IP"
-
-          # Run eval container on the same network as Smokescreen
-          docker run -d \
-            --name eval-container \
-            --network eval-network \
-            -v "$PWD:/workspace:rw" \
-            -w /workspace \
-            -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
-            -e CLAUDE_MODEL="$CLAUDE_MODEL" \
-            -e HOME=/root \
-            -e HTTP_PROXY="http://${PROXY_IP}:4750" \
-            -e HTTPS_PROXY="http://${PROXY_IP}:4750" \
-            -e http_proxy="http://${PROXY_IP}:4750" \
-            -e https_proxy="http://${PROXY_IP}:4750" \
-            ubuntu:22.04 \
-            sleep infinity
-
-          # Get eval container IP for nftables rules
-          CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' eval-container)
-          echo "Eval container IP: $CONTAINER_IP"
-
-          # Install minimal dependencies in container before network restrictions
-          docker exec eval-container bash -c '
-            apt-get update -qq && apt-get install -y -qq ca-certificates curl > /dev/null 2>&1
-          '
-
-          # Setup nftables to block all egress except to the proxy
-          # This prevents bypassing the proxy with raw sockets
-          sudo nft -f - << EOF
-          table inet eval_restrict {
-              chain forward {
-                  type filter hook forward priority 0; policy accept;
-
-                  # Only restrict traffic from the eval container
-                  ip saddr $CONTAINER_IP jump eval_egress
-              }
-
-              chain eval_egress {
-                  # Allow established/related connections
-                  ct state established,related accept
-
-                  # Allow traffic to Smokescreen proxy
-                  ip daddr $PROXY_IP tcp dport 4750 accept
-
-                  # Log and drop everything else
-                  log prefix "EVAL_BLOCKED: " drop
-              }
-          }
-          EOF
-
-          echo "nftables rules configured:"
-          sudo nft list ruleset
-
-          echo "Network restrictions active. Running eval..."
-
-          # Run the eval inside the container
-          docker exec \
-            -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
-            -e CLAUDE_MODEL="$CLAUDE_MODEL" \
-            -e HTTP_PROXY="http://${PROXY_IP}:4750" \
-            -e HTTPS_PROXY="http://${PROXY_IP}:4750" \
-            -e http_proxy="http://${PROXY_IP}:4750" \
-            -e https_proxy="http://${PROXY_IP}:4750" \
-            eval-container bash -c '
-              export PATH="/workspace/o:$PATH"
-              CLAUDE=/workspace/o/claude COSMIC_URL=https://github.com/whilp/cosmic/releases/download/2026-02-02-a36771f/cosmic-lua \
-                /workspace/o/cosmic-lua /workspace/scripts/run-eval.tl '"${{ matrix.scenario }}"'
-            ' || true
-
-          # Show proxy logs for debugging
-          echo "=== Smokescreen proxy logs ==="
-          docker logs smokescreen 2>&1 | tail -50
-
-          # Show any blocked connection attempts
-          echo "=== Blocked connection attempts ==="
-          sudo dmesg | grep "EVAL_BLOCKED" | tail -20 || echo "No blocked attempts logged"
-
-      - name: Cleanup containers and network rules
-        if: always()
-        run: |
-          # Remove nftables rules
-          sudo nft delete table inet eval_restrict 2>/dev/null || true
-          # Stop and remove containers
-          docker stop eval-container smokescreen 2>/dev/null || true
-          docker rm eval-container smokescreen 2>/dev/null || true
-          docker network rm eval-network 2>/dev/null || true
+        run: make eval-sandbox only=${{ matrix.scenario }}
 
       - name: Upload results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: eval-${{ matrix.scenario }}
@@ -242,10 +65,10 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Download all results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: o
           pattern: eval-*

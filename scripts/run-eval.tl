@@ -104,6 +104,14 @@ local env = {
   "CLAUDE_CODE_OAUTH_TOKEN=" .. (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or ""),
 }
 
+-- Forward proxy env vars when set (needed for sandboxed runs)
+for _, k in ipairs({"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"}) do
+  local v = os.getenv(k)
+  if v then
+    table.insert(env, k .. "=" .. v)
+  end
+end
+
 local handle, spawn_err = child.spawn({
   claude_bin,
   "-p", prompt,
